@@ -3,7 +3,7 @@ import type { IncomingMessage } from "http";
 import type { Server } from "http";
 import { eq } from "drizzle-orm";
 import { config } from "../config/index.js";
-import { buildSarvamSessionConfig } from "../services/sarvam.service.js";
+import { buildSarvamSessionConfig, SARVAM_WS_URL } from "../services/sarvam.service.js";
 import { logger } from "../lib/logger.js";
 import { updateCallTranscript } from "../modules/calls/calls.service.js";
 import { analyzeCallAndUpdateLead } from "../modules/ai/ai.service.js";
@@ -25,28 +25,30 @@ export function attachMediaStreamServer(httpServer: Server): void {
   });
 
   wss.on("connection", (twilioWs: WebSocket, req: IncomingMessage) => {
+    // Try URL params first (fallback); real leadId comes from Twilio customParameters in "start"
     const urlParams = new URL(req.url ?? "", "http://localhost");
-    const leadId = parseInt(urlParams.searchParams.get("leadId") ?? "0");
-    logger.info({ leadId }, "Twilio media stream connected");
+    const urlLeadId = parseInt(urlParams.searchParams.get("leadId") ?? "0");
+    logger.info({ urlLeadId }, "Twilio media stream connected");
 
     let sarvamWs: WebSocket | null = null;
     let twilioCallSid: string | null = null;
     let transcript = "";
     let callDbId: number | null = null;
     let streamStopped = false;
+    let resolvedLeadId = urlLeadId; // overridden from customParameters on "start"
 
     function connectToSarvam() {
       if (!config.sarvam.apiKey) {
-        logger.warn({ leadId }, "SARVAM_API_KEY not set — skipping AI connection");
+        logger.warn({ leadId: resolvedLeadId }, "SARVAM_API_KEY not set — skipping AI connection");
         return;
       }
 
-      sarvamWs = new WebSocket(`wss://api.sarvam.ai/v1/realtime?model=sarvam-1`, {
+      sarvamWs = new WebSocket(SARVAM_WS_URL, {
         headers: { Authorization: `Bearer ${config.sarvam.apiKey}` },
       });
 
       sarvamWs.on("open", () => {
-        logger.info({ leadId }, "Sarvam WebSocket connected");
+        logger.info({ leadId: resolvedLeadId }, "Sarvam WebSocket connected");
         sarvamWs?.send(
           JSON.stringify({
             type: "session.update",
@@ -87,7 +89,7 @@ export function attachMediaStreamServer(httpServer: Server): void {
 
           // Sarvam session error
           if (msg.type === "error") {
-            logger.error({ leadId, error: msg.error }, "Sarvam session error");
+            logger.error({ leadId: resolvedLeadId, error: msg.error }, "Sarvam session error");
           }
         } catch (err) {
           logger.error({ err }, "Error parsing Sarvam message");
@@ -95,11 +97,11 @@ export function attachMediaStreamServer(httpServer: Server): void {
       });
 
       sarvamWs.on("close", (code, reason) => {
-        logger.info({ leadId, code, reason: reason.toString() }, "Sarvam WebSocket closed");
+        logger.info({ leadId: resolvedLeadId, code, reason: reason.toString() }, "Sarvam WebSocket closed");
       });
 
       sarvamWs.on("error", (err) => {
-        logger.error({ err, leadId }, "Sarvam WebSocket error");
+        logger.error({ err, leadId: resolvedLeadId }, "Sarvam WebSocket error");
       });
     }
 
@@ -109,28 +111,25 @@ export function attachMediaStreamServer(httpServer: Server): void {
 
       sarvamWs?.close();
 
-      logger.info({ leadId, twilioCallSid, transcriptLength: transcript.length }, "Finalizing stream");
+      logger.info({ leadId: resolvedLeadId, twilioCallSid, transcriptLength: transcript.length }, "Finalizing stream");
 
       try {
         if (twilioCallSid && transcript.trim()) {
-          // Save transcript to the call record
           await updateCallTranscript(twilioCallSid, transcript.trim());
-          logger.info({ leadId, twilioCallSid }, "Transcript saved");
+          logger.info({ leadId: resolvedLeadId, twilioCallSid }, "Transcript saved");
         }
 
         if (callDbId) {
-          // Run AI analysis — this sets the final lead status
           await analyzeCallAndUpdateLead(callDbId);
-        } else if (leadId) {
-          // callDbId wasn't resolved from the start event — mark lead completed as fallback
-          logger.warn({ leadId }, "No callDbId resolved — marking lead completed as fallback");
+        } else if (resolvedLeadId) {
+          logger.warn({ leadId: resolvedLeadId }, "No callDbId resolved — marking lead completed as fallback");
           await db
             .update(leadsTable)
             .set({ status: "completed", updatedAt: new Date() })
-            .where(eq(leadsTable.id, leadId));
+            .where(eq(leadsTable.id, resolvedLeadId));
         }
       } catch (err) {
-        logger.error({ err, leadId, callDbId }, "Error finalizing stream");
+        logger.error({ err, leadId: resolvedLeadId, callDbId }, "Error finalizing stream");
       }
     }
 
@@ -142,7 +141,15 @@ export function attachMediaStreamServer(httpServer: Server): void {
         if (event === "start") {
           const startData = msg.start as Record<string, unknown> | undefined;
           twilioCallSid = (startData?.callSid as string) ?? null;
-          logger.info({ twilioCallSid, leadId }, "Media stream started");
+
+          // Read leadId from Twilio <Parameter> customParameters (most reliable method)
+          const customParams = startData?.customParameters as Record<string, string> | undefined;
+          const paramLeadId = parseInt(customParams?.leadId ?? "0");
+          if (paramLeadId) {
+            resolvedLeadId = paramLeadId;
+          }
+
+          logger.info({ twilioCallSid, leadId: resolvedLeadId }, "Media stream started");
 
           // Look up the call DB record by Twilio SID
           if (twilioCallSid) {
@@ -173,7 +180,7 @@ export function attachMediaStreamServer(httpServer: Server): void {
         }
 
         if (event === "stop") {
-          logger.info({ leadId, twilioCallSid }, "Media stream stopped");
+          logger.info({ leadId: resolvedLeadId, twilioCallSid }, "Media stream stopped");
           await finalizeStream();
         }
       } catch (err) {
@@ -182,13 +189,12 @@ export function attachMediaStreamServer(httpServer: Server): void {
     });
 
     twilioWs.on("close", async () => {
-      logger.info({ leadId }, "Twilio WebSocket disconnected");
-      // Ensure finalization runs if "stop" event wasn't received
+      logger.info({ leadId: resolvedLeadId }, "Twilio WebSocket disconnected");
       await finalizeStream();
     });
 
     twilioWs.on("error", (err) => {
-      logger.error({ err, leadId }, "Twilio WebSocket error");
+      logger.error({ err, leadId: resolvedLeadId }, "Twilio WebSocket error");
     });
   });
 

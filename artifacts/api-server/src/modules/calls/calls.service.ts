@@ -39,6 +39,17 @@ export async function triggerCallForLead(leadId: number): Promise<void> {
       .where(eq(callsTable.id, call.id));
     logger.info({ leadId, callSid, callDbId: call.id }, "Call record updated with Twilio SID");
   } catch (err) {
+    const twilioCode = (err as Record<string, unknown>)?.code as number | undefined;
+
+    // 21219 = unverified destination (trial account) — permanent, never retry
+    if (twilioCode === 21219) {
+      logger.warn({ leadId, callDbId: call.id }, "Twilio error 21219: unverified destination — marking lead no_response permanently");
+      await db.delete(callsTable).where(eq(callsTable.id, call.id));
+      await updateLeadStatus(leadId, "no_response");
+      dequeueLeadJobs(leadId);
+      return; // Don't throw — no retry
+    }
+
     logger.error({ err, leadId, callDbId: call.id }, "Failed to initiate Twilio call — reverting lead to pending");
     await db.delete(callsTable).where(eq(callsTable.id, call.id));
     await updateLeadStatus(leadId, "pending");

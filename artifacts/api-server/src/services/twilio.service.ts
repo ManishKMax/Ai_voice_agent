@@ -46,7 +46,9 @@ export function generateTwiML(leadId: number): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${wsUrl}/api/media-stream?leadId=${leadId}" />
+    <Stream url="${wsUrl}/api/media-stream">
+      <Parameter name="leadId" value="${leadId}" />
+    </Stream>
   </Connect>
 </Response>`;
 }

@@ -1,7 +1,7 @@
 import { logger } from "../lib/logger.js";
 import { config } from "../config/index.js";
 
-const SARVAM_WS_URL = "wss://api.sarvam.ai/v1/realtime";
+export const SARVAM_WS_URL = "wss://api.sarvam.ai/v1/realtime?model=sarvam-m";
 
 export type SarvamMessage =
   | { type: "session.update"; session: Record<string, unknown> }
@@ -20,12 +20,12 @@ Speak clearly and naturally. Keep responses short and focused.`;
 
 export function buildSarvamSessionConfig() {
   return {
-    model: "sarvam-1",
+    model: "sarvam-m",
     instructions: SYSTEM_PROMPT,
     voice: "meera",
     input_audio_format: "mulaw",
     output_audio_format: "mulaw",
-    input_audio_transcription: { model: "sarvam-1" },
+    input_audio_transcription: { model: "sarvam-m" },
     turn_detection: {
       type: "server_vad",
       threshold: 0.5,
@@ -62,7 +62,7 @@ Respond with exactly this JSON format:
         Authorization: `Bearer ${config.sarvam.apiKey}`,
       },
       body: JSON.stringify({
-        model: "sarvam-1",
+        model: "sarvam-m",
         messages: [{ role: "user", content: prompt }],
         temperature: 0.1,
       }),

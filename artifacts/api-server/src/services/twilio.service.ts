@@ -39,24 +39,28 @@ export async function initiateCall(toPhone: string, leadId: number): Promise<str
 
 /**
  * Initial TwiML — plays the agent's greeting then gathers speech.
- * audioId: key into the in-memory audio cache.
+ *
+ * Changes vs old version:
+ * - callSid removed from action URL (Twilio always sends CallSid in POST body)
+ * - enhanced="true" removed (adds latency, hurts Indian accent recognition)
+ * - speechTimeout="auto" (ML-based end-of-speech, better for Indian accents)
+ * - timeout="15" (more time for lead to start speaking after greeting)
  */
 export function generateInitialTwiML(
   leadId: number,
-  callSid: string,
   audioId: string,
   language: string
 ): string {
   const audioUrl = `${config.baseUrl}/api/voice/audio/${audioId}`;
   const gatherAction = escapeUrl(
-    `${config.baseUrl}/api/voice/gather?leadId=${leadId}&callSid=${encodeURIComponent(callSid)}&turn=0`
+    `${config.baseUrl}/api/voice/gather?leadId=${leadId}&turn=0`
   );
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Gather input="speech" action="${gatherAction}" method="POST"
-          language="${language}" speechTimeout="3" timeout="10"
-          enhanced="true">
+          language="${language}" speechTimeout="auto" timeout="15"
+          maxSpeechTime="15">
     <Play>${audioUrl}</Play>
   </Gather>
   <Hangup/>
@@ -64,25 +68,53 @@ export function generateInitialTwiML(
 }
 
 /**
- * Mid-conversation TwiML — plays agent response then gathers next speech.
+ * Immediate filler TwiML — returned within milliseconds of receiving speech.
+ * Plays a natural acknowledgement using Twilio's built-in Polly voice (no API call),
+ * then redirects to /api/voice/respond where the real AI response is waiting.
+ *
+ * This eliminates dead-air silence during the 5-7 second AI + TTS processing window.
  */
-export function generateGatherTwiML(
+export function generateFillerTwiML(
   leadId: number,
-  callSid: string,
+  turn: number,
+  jobId: string,
+  fillerText: string,
+  language: string
+): string {
+  // Use Polly.Aditi for all Indian languages — she handles both English and Hindi
+  const voice = "Polly.Aditi";
+
+  const respondUrl = escapeUrl(
+    `${config.baseUrl}/api/voice/respond?leadId=${leadId}&turn=${turn}&jobId=${jobId}`
+  );
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}" language="${language}">${escapeXml(fillerText)}</Say>
+  <Redirect method="POST">${respondUrl}</Redirect>
+</Response>`;
+}
+
+/**
+ * Respond TwiML — served after the background AI job has finished.
+ * Plays the Sarvam TTS audio then gathers the next speech turn.
+ */
+export function generateRespondTwiML(
+  leadId: number,
   turn: number,
   audioId: string,
   language: string
 ): string {
   const audioUrl = `${config.baseUrl}/api/voice/audio/${audioId}`;
   const gatherAction = escapeUrl(
-    `${config.baseUrl}/api/voice/gather?leadId=${leadId}&callSid=${encodeURIComponent(callSid)}&turn=${turn}`
+    `${config.baseUrl}/api/voice/gather?leadId=${leadId}&turn=${turn}`
   );
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Gather input="speech" action="${gatherAction}" method="POST"
-          language="${language}" speechTimeout="3" timeout="10"
-          enhanced="true">
+          language="${language}" speechTimeout="auto" timeout="15"
+          maxSpeechTime="15">
     <Play>${audioUrl}</Play>
   </Gather>
   <Hangup/>
@@ -108,11 +140,10 @@ export function generateSayTwiML(
   text: string,
   language: string,
   leadId?: number,
-  callSid?: string,
   turn?: number,
   isEnd = false
 ): string {
-  const voice = language.startsWith("hi") ? "Polly.Aditi" : "Polly.Aditi";
+  const voice = "Polly.Aditi";
 
   if (isEnd || leadId === undefined) {
     return `<?xml version="1.0" encoding="UTF-8"?>
@@ -123,14 +154,14 @@ export function generateSayTwiML(
   }
 
   const gatherAction = escapeUrl(
-    `${config.baseUrl}/api/voice/gather?leadId=${leadId}&callSid=${encodeURIComponent(callSid ?? "")}&turn=${turn ?? 0}`
+    `${config.baseUrl}/api/voice/gather?leadId=${leadId}&turn=${turn ?? 0}`
   );
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Gather input="speech" action="${gatherAction}" method="POST"
-          language="${language}" speechTimeout="3" timeout="10"
-          enhanced="true">
+          language="${language}" speechTimeout="auto" timeout="15"
+          maxSpeechTime="15">
     <Say voice="${voice}" language="${language}">${escapeXml(text)}</Say>
   </Gather>
   <Hangup/>

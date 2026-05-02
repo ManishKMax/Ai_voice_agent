@@ -4,6 +4,7 @@ import { twilioValidate } from "../../middlewares/twilio-validate.js";
 import {
   voiceWebhook,
   voiceGatherWebhook,
+  voiceRespondWebhook,
   serveAudio,
   callStatusWebhook,
   initiateCallManually,
@@ -17,6 +18,7 @@ const router = Router();
 // Twilio webhooks — signature-validated, no user auth
 router.post("/voice", twilioValidate, voiceWebhook);
 router.post("/voice/gather", twilioValidate, voiceGatherWebhook);
+router.post("/voice/respond", twilioValidate, voiceRespondWebhook);
 router.post("/call-status", twilioValidate, callStatusWebhook);
 
 // Serve TTS audio blobs for Twilio <Play> — public, no auth (Twilio downloads these)

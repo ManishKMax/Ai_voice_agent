@@ -1,8 +1,10 @@
 import type { Request, Response } from "express";
 import type { AuthRequest } from "../../middlewares/auth.js";
+import { randomUUID } from "crypto";
 import {
   generateInitialTwiML,
-  generateGatherTwiML,
+  generateFillerTwiML,
+  generateRespondTwiML,
   generateEndCallTwiML,
   generateSayTwiML,
 } from "../../services/twilio.service.js";
@@ -37,27 +39,101 @@ function xmlResponse(res: Response, twiml: string): void {
   res.send(twiml);
 }
 
-async function makeTwimlWithAudio(
-  text: string,
-  leadId: number,
-  callSid: string,
-  turn: number,
-  isEnd: boolean
-): Promise<string> {
-  const audioBuffer = await generateSpeech(text, agentConfig);
+// ── Async Job Store ──────────────────────────────────────────────────────────
+//
+// When a lead speaks, we respond to Twilio IMMEDIATELY with a filler phrase
+// (< 200ms) and process the AI response in the background. The /api/voice/respond
+// endpoint polls this store and serves the real audio once ready.
+//
+// This eliminates the ~7s dead-air silence that was causing users to hang up.
 
-  if (!audioBuffer) {
-    // Fallback to Twilio <Say> if TTS fails
-    logger.warn({ leadId, turn }, "Sarvam TTS failed — falling back to Twilio Say");
-    return generateSayTwiML(text, agentConfig.language, isEnd ? undefined : leadId, callSid, turn, isEnd);
+interface ConversationJob {
+  status: "pending" | "done" | "error";
+  callSid: string;
+  leadId: number;
+  turn: number;
+  audioId?: string;
+  agentText?: string;
+  isEnd?: boolean;
+  createdAt: number;
+}
+
+const jobs = new Map<string, ConversationJob>();
+
+// Clean up stale jobs every 5 minutes (TTL: 10 minutes)
+setInterval(() => {
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  for (const [id, job] of jobs) {
+    if (job.createdAt < cutoff) jobs.delete(id);
   }
+}, 5 * 60 * 1000);
 
-  const audioId = storeAudio(audioBuffer, "audio/wav");
-
-  if (isEnd) {
-    return generateEndCallTwiML(audioId);
+/** Poll the job store until the job is done or timeout is reached. */
+async function waitForJob(jobId: string, timeoutMs: number): Promise<ConversationJob | null> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const job = jobs.get(jobId);
+    if (job && job.status !== "pending") return job;
+    await new Promise<void>(resolve => setTimeout(resolve, 200));
   }
-  return generateGatherTwiML(leadId, callSid, turn, audioId, agentConfig.language);
+  // Return whatever state we have (might still be pending — caller handles it)
+  return jobs.get(jobId) ?? null;
+}
+
+/** Pick a natural filler phrase based on the agent's configured tone. */
+function getFillerPhrase(): string {
+  switch (agentConfig.tone) {
+    case "friendly": return "Oh sure, let me check on that for you.";
+    case "casual":   return "Sure, give me just one second.";
+    default:         return "Hmm, one moment please.";
+  }
+}
+
+/**
+ * Background worker: generates the AI text response + Sarvam TTS audio,
+ * then stores the result in the jobs Map so voiceRespondWebhook can serve it.
+ */
+async function processConversationJob(jobId: string, speechResult: string): Promise<void> {
+  const job = jobs.get(jobId);
+  if (!job) return;
+
+  const { callSid, leadId, turn } = job;
+
+  try {
+    const session = getSession(callSid);
+    const nextTurn = turn + 1;
+
+    // Session not found or turn limit reached — say goodbye
+    if (!session || nextTurn > agentConfig.maxTurns) {
+      const byeText = "Thank you so much for your time. I'll follow up with more information. Have a wonderful day!";
+      addTurn(callSid, speechResult, byeText);
+      await finaliseCall(callSid, leadId);
+      const audioBuffer = await generateSpeech(byeText, agentConfig);
+      const audioId = audioBuffer ? storeAudio(audioBuffer, "audio/wav") : undefined;
+      jobs.set(jobId, { ...job, status: "done", audioId, agentText: byeText, isEnd: true });
+      return;
+    }
+
+    // Generate AI response text
+    const { text: agentText, shouldEnd } = await generateConversationResponse(session.messages, speechResult);
+    addTurn(callSid, speechResult, agentText);
+
+    const isEnd = shouldEnd || nextTurn >= agentConfig.maxTurns;
+
+    // Generate TTS audio for the AI response
+    const audioBuffer = await generateSpeech(agentText, agentConfig);
+    const audioId = audioBuffer ? storeAudio(audioBuffer, "audio/wav") : undefined;
+
+    if (isEnd) {
+      await finaliseCall(callSid, leadId);
+    }
+
+    jobs.set(jobId, { ...job, status: "done", audioId, agentText, isEnd });
+    logger.info({ jobId, leadId, turn: nextTurn, isEnd }, "Conversation job completed");
+  } catch (err) {
+    logger.error({ err, jobId, leadId }, "Conversation job failed");
+    jobs.set(jobId, { ...job, status: "error" });
+  }
 }
 
 // ── Voice Webhook (initial call entry) ─────────────────────────────────────
@@ -76,12 +152,12 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
     // Build the opening line
     const greetingText = agentConfig.tone === "professional"
       ? `Hello, this is ${agentConfig.name} calling from ${agentConfig.companyName}. May I speak with ${leadName}?`
+      : agentConfig.tone === "casual"
+      ? `Hey! This is ${agentConfig.name} from ${agentConfig.companyName}. Is this ${leadName}?`
       : `Hi there! This is ${agentConfig.name} from ${agentConfig.companyName}. Am I speaking with ${leadName}?`;
 
-    // System prompt includes the greeting so the AI has full context for turn 1
     const systemPrompt = buildSystemPrompt(agentConfig, leadName, greetingText);
 
-    // Create conversation session
     createSession(callSid, leadId, leadName, systemPrompt);
     addAgentOpening(callSid, greetingText);
 
@@ -90,15 +166,14 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
     const audioBuffer = await generateSpeech(greetingText, agentConfig);
 
     if (!audioBuffer) {
-      // TTS failed — use Twilio <Say> fallback
       logger.warn({ leadId }, "TTS failed for greeting — using Twilio Say");
-      const twiml = generateSayTwiML(greetingText, agentConfig.language, leadId, callSid, 0, false);
+      const twiml = generateSayTwiML(greetingText, agentConfig.language, leadId, 0, false);
       xmlResponse(res, twiml);
       return;
     }
 
     const audioId = storeAudio(audioBuffer, "audio/wav");
-    const twiml = generateInitialTwiML(leadId, callSid, audioId, agentConfig.language);
+    const twiml = generateInitialTwiML(leadId, audioId, agentConfig.language);
     xmlResponse(res, twiml);
   } catch (err) {
     logger.error({ err, leadId }, "Voice webhook error");
@@ -106,13 +181,24 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
   }
 }
 
-// ── Gather Webhook (handles lead's speech) ──────────────────────────────────
+// ── Gather Webhook (handles lead's spoken response) ─────────────────────────
+//
+// KEY CHANGE: Instead of generating AI response here (7+ seconds), we:
+// 1. Immediately start a background job for AI + TTS generation
+// 2. Return a filler phrase TwiML within ~200ms
+// 3. The filler TwiML redirects to /api/voice/respond once the job is done
+//
+// This prevents the 7-second dead-air silence that caused leads to hang up.
 
 export async function voiceGatherWebhook(req: Request, res: Response): Promise<void> {
   const q = req.query as Record<string, string>;
   const body = req.body as Record<string, string>;
   const leadId = parseInt(q.leadId ?? "0");
-  const callSid = q.callSid ?? body.CallSid ?? "";
+
+  // Always read CallSid from the POST body — Twilio always includes it.
+  // Previously we passed callSid in the URL query string which caused
+  // potential encoding issues; now the URL only carries leadId and turn.
+  const callSid = body.CallSid ?? "";
   const turn = parseInt(q.turn ?? "0");
 
   const speechResult = body.SpeechResult ?? "";
@@ -121,58 +207,105 @@ export async function voiceGatherWebhook(req: Request, res: Response): Promise<v
   logger.info({ leadId, callSid, turn, speechResult, confidence }, "Gather webhook received");
 
   try {
-    // If no speech was detected, re-prompt or end
+    // No speech detected — re-prompt using Polly (instant, no TTS API needed)
     if (!speechResult.trim()) {
-      const repromptText = "I'm sorry, I didn't catch that. Could you please repeat?";
-      if (turn >= 1) {
-        // Give up after re-prompting once
-        const byeText = `Thank you for your time. I'll try reaching you another time. Have a great day!`;
-        const twiml = await makeTwimlWithAudio(byeText, leadId, callSid, turn + 1, true);
-        xmlResponse(res, twiml);
+      logger.info({ leadId, callSid, turn }, "No speech detected — re-prompting");
+      if (turn >= 2) {
+        xmlResponse(res, generateSayTwiML(
+          "I'm sorry I couldn't hear you. I'll try reaching you another time. Have a great day!",
+          agentConfig.language
+        ));
       } else {
-        const twiml = await makeTwimlWithAudio(repromptText, leadId, callSid, turn + 1, false);
-        xmlResponse(res, twiml);
+        xmlResponse(res, generateSayTwiML(
+          "I'm sorry, I didn't quite catch that. Could you please repeat?",
+          agentConfig.language, leadId, turn + 1, false
+        ));
       }
       return;
     }
 
-    const session = getSession(callSid);
-    const nextTurn = turn + 1;
+    // Create a job and start background AI processing
+    const jobId = randomUUID();
+    const job: ConversationJob = { status: "pending", callSid, leadId, turn, createdAt: Date.now() };
+    jobs.set(jobId, job);
 
-    // Check turn limit
-    if (!session || nextTurn > agentConfig.maxTurns) {
-      const byeText = `Thank you so much for your time. I'll follow up with more information. Have a wonderful day!`;
-      addTurn(callSid, speechResult, byeText);
-      await finaliseCall(callSid, leadId);
-      const twiml = await makeTwimlWithAudio(byeText, leadId, callSid, nextTurn, true);
-      xmlResponse(res, twiml);
-      return;
-    }
+    // Fire-and-forget — voiceRespondWebhook will pick up the result
+    processConversationJob(jobId, speechResult).catch(err => {
+      logger.error({ err, jobId }, "processConversationJob unhandled rejection");
+      jobs.set(jobId, { ...job, status: "error" });
+    });
 
-    // Generate AI response
-    const { text: agentText, shouldEnd } = await generateConversationResponse(
-      session.messages,
-      speechResult
-    );
-
-    addTurn(callSid, speechResult, agentText);
-    logger.info({ leadId, turn: nextTurn, agentText, shouldEnd }, "AI response generated");
-
-    if (shouldEnd || nextTurn >= agentConfig.maxTurns) {
-      await finaliseCall(callSid, leadId);
-      const twiml = await makeTwimlWithAudio(agentText, leadId, callSid, nextTurn, true);
-      xmlResponse(res, twiml);
-    } else {
-      const twiml = await makeTwimlWithAudio(agentText, leadId, callSid, nextTurn, false);
-      xmlResponse(res, twiml);
-    }
+    // Respond to Twilio IMMEDIATELY with a natural filler phrase
+    const filler = getFillerPhrase();
+    logger.info({ jobId, leadId, turn, filler }, "Returning filler — background job started");
+    xmlResponse(res, generateFillerTwiML(leadId, turn, jobId, filler, agentConfig.language));
   } catch (err) {
     logger.error({ err, leadId, turn }, "Gather webhook error");
     xmlResponse(res, `<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
   }
 }
 
-/** Save transcript, run AI analysis, update lead status. */
+// ── Respond Webhook (serves real AI audio after background job completes) ───
+
+export async function voiceRespondWebhook(req: Request, res: Response): Promise<void> {
+  const q = req.query as Record<string, string>;
+  const leadId = parseInt(q.leadId ?? "0");
+  const turn = parseInt(q.turn ?? "0");
+  const jobId = q.jobId ?? "";
+
+  logger.info({ jobId, leadId, turn }, "Respond webhook — waiting for background job");
+
+  try {
+    // Poll for up to 12 seconds.
+    // The filler phrase takes ~0.5–1s to play before Twilio calls this endpoint,
+    // so we effectively have ~11 more seconds of budget before Twilio's 15s timeout.
+    const job = await waitForJob(jobId, 12000);
+
+    if (!job || job.status === "error") {
+      logger.warn({ jobId, leadId }, "Job failed or timed out — ending call gracefully");
+      xmlResponse(res, generateSayTwiML(
+        "I apologize, I had a brief technical issue. I'll call you back shortly. Have a great day!",
+        agentConfig.language
+      ));
+      return;
+    }
+
+    const nextTurn = turn + 1;
+
+    if (job.isEnd) {
+      if (job.audioId) {
+        xmlResponse(res, generateEndCallTwiML(job.audioId));
+      } else {
+        xmlResponse(res, generateSayTwiML(
+          job.agentText ?? "Thank you for your time. Have a great day!",
+          agentConfig.language
+        ));
+      }
+      return;
+    }
+
+    if (job.audioId) {
+      xmlResponse(res, generateRespondTwiML(leadId, nextTurn, job.audioId, agentConfig.language));
+    } else {
+      // TTS failed — fall back to Polly so the conversation doesn't drop
+      xmlResponse(res, generateSayTwiML(
+        job.agentText ?? "I see. Could you tell me more?",
+        agentConfig.language, leadId, nextTurn, false
+      ));
+    }
+
+    logger.info({ jobId, leadId, turn: nextTurn }, "Respond webhook served AI audio");
+  } catch (err) {
+    logger.error({ err, jobId, leadId }, "Respond webhook error");
+    xmlResponse(res, generateSayTwiML(
+      "I apologize for the interruption. I'll reach out again soon.",
+      agentConfig.language
+    ));
+  }
+}
+
+// ── finaliseCall ─────────────────────────────────────────────────────────────
+
 async function finaliseCall(callSid: string, leadId: number): Promise<void> {
   const session = endSession(callSid);
   if (!session || !session.transcript) {
@@ -250,8 +383,6 @@ export async function callStatusWebhook(req: Request, res: Response): Promise<vo
         duration ? parseInt(duration) : undefined
       );
 
-      // If the call completed but we still have an open session (rare edge case),
-      // finalise it now.
       if (callStatus.toLowerCase() === "completed") {
         const session = getSession(callSid);
         if (session) {
@@ -334,4 +465,3 @@ export async function listCallsForLead(req: AuthRequest, res: Response): Promise
     res.status(500).json({ error: msg });
   }
 }
-

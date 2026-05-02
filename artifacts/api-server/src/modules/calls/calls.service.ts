@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import { callsTable, leadsTable, type CallStatus } from "@workspace/db/schema";
 import { initiateCall } from "../../services/twilio.service.js";
 import { updateLeadStatus } from "../leads/leads.service.js";
-import { enqueueLead } from "../queue/queue.service.js";
+import { enqueueLead, dequeueLeadJobs } from "../queue/queue.service.js";
 import { logger } from "../../lib/logger.js";
 
 export async function triggerCallForLead(leadId: number): Promise<void> {
@@ -40,7 +40,6 @@ export async function triggerCallForLead(leadId: number): Promise<void> {
     logger.info({ leadId, callSid, callDbId: call.id }, "Call record updated with Twilio SID");
   } catch (err) {
     logger.error({ err, leadId, callDbId: call.id }, "Failed to initiate Twilio call — reverting lead to pending");
-    // Roll back: delete orphan call record and reset lead so queue can retry
     await db.delete(callsTable).where(eq(callsTable.id, call.id));
     await updateLeadStatus(leadId, "pending");
     throw err;
@@ -66,7 +65,6 @@ export async function handleCallStatusUpdate(
     .limit(1);
 
   // Race condition guard: "initiated" webhook may arrive before we write the SID.
-  // Fall back to looking up by leadId + initiated status.
   if (!callRow && status === "initiated") {
     const [fallback] = await db
       .select()
@@ -76,7 +74,6 @@ export async function handleCallStatusUpdate(
       .limit(1);
 
     if (fallback && !fallback.twilioCallSid) {
-      // Write the SID now that we have it
       await db
         .update(callsTable)
         .set({ twilioCallSid, updatedAt: new Date() })
@@ -103,9 +100,23 @@ export async function handleCallStatusUpdate(
     .where(eq(callsTable.id, callRow.id))
     .returning();
 
-  // Update lead status based on terminal call states
   if (status === "completed") {
-    await updateLeadStatus(leadId, "completed");
+    // Do NOT set lead status to "completed" here unconditionally.
+    // The AI analysis (triggered from the media stream stop event) is the
+    // authoritative source of the final lead status (interested / not_interested / completed).
+    // Only fall back to "completed" if the lead is still stuck in "calling",
+    // meaning no stream connected and no AI analysis ran.
+    const [lead] = await db
+      .select({ status: leadsTable.status })
+      .from(leadsTable)
+      .where(eq(leadsTable.id, leadId))
+      .limit(1);
+
+    if (lead?.status === "calling") {
+      // No stream/AI analysis ran — mark completed as a safe fallback
+      await updateLeadStatus(leadId, "completed");
+      logger.info({ leadId }, "Call completed with no stream analysis — lead marked completed");
+    }
   } else if (status === "no-answer" || status === "busy") {
     const [lead] = await db
       .select({ retryCount: leadsTable.retryCount })
@@ -125,10 +136,12 @@ export async function handleCallStatusUpdate(
       enqueueLead(leadId, retryDelayMs);
       logger.info({ leadId, retryCount: retries + 1 }, "Lead scheduled for retry");
     } else {
+      dequeueLeadJobs(leadId); // remove any stale queue jobs
       await updateLeadStatus(leadId, "no_response");
       logger.info({ leadId }, "Lead marked no_response — max retries exhausted");
     }
   } else if (status === "failed") {
+    dequeueLeadJobs(leadId);
     await updateLeadStatus(leadId, "no_response");
   }
 

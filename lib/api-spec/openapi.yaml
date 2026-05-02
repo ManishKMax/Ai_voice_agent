@@ -3,20 +3,30 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: AI Lead Calling & Qualification System API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Authentication
+  - name: leads
+    description: Lead management
+  - name: calls
+    description: Call management
+  - name: dashboard
+    description: Dashboard statistics
+  - name: ai
+    description: AI analysis
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,13 +34,544 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /auth/register:
+    post:
+      operationId: registerUser
+      tags: [auth]
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: User registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/login:
+    post:
+      operationId: loginUser
+      tags: [auth]
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /leads:
+    post:
+      operationId: createLead
+      tags: [leads]
+      summary: Create a lead
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLeadRequest"
+      responses:
+        "201":
+          description: Lead created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeadResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    get:
+      operationId: getLeads
+      tags: [leads]
+      summary: List leads
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            $ref: "#/components/schemas/LeadStatus"
+        - in: query
+          name: search
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of leads
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeadsListResponse"
+
+  /leads/export:
+    get:
+      operationId: exportLeads
+      tags: [leads]
+      summary: Export leads as CSV
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: CSV file
+          content:
+            text/csv:
+              schema:
+                type: string
+
+  /leads/{id}:
+    get:
+      operationId: getLeadById
+      tags: [leads]
+      summary: Get lead by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Lead details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SingleLeadResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /call/initiate/{leadId}:
+    post:
+      operationId: initiateCall
+      tags: [calls]
+      summary: Manually initiate a call for a lead
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: leadId
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Call initiated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InitiateCallResponse"
+        "500":
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /calls:
+    get:
+      operationId: getCalls
+      tags: [calls]
+      summary: List all calls
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of calls
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallsListResponse"
+
+  /calls/{id}:
+    get:
+      operationId: getCallById
+      tags: [calls]
+      summary: Get call by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Call details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SingleCallResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /dashboard/stats:
+    get:
+      operationId: getDashboardStats
+      tags: [dashboard]
+      summary: Get dashboard statistics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Dashboard stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardStats"
+
+  /ai/analyze/{callId}:
+    post:
+      operationId: analyzeCall
+      tags: [ai]
+      summary: Trigger AI analysis for a call
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: callId
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Analysis complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyzeCallResponse"
+
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
   schemas:
     HealthStatus:
       type: object
       properties:
         status:
           type: string
-      required:
-        - status
+      required: [status]
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    RegisterRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 6
+      required: [name, email, password]
+
+    RegisterResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        user:
+          $ref: "#/components/schemas/UserPublic"
+      required: [message, user]
+
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+      required: [email, password]
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          $ref: "#/components/schemas/UserPublic"
+      required: [token, user]
+
+    UserPublic:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+      required: [id, name, email]
+
+    LeadStatus:
+      type: string
+      enum:
+        - pending
+        - calling
+        - completed
+        - interested
+        - not_interested
+        - no_response
+
+    Lead:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        phone:
+          type: string
+        source:
+          type: string
+          nullable: true
+        status:
+          $ref: "#/components/schemas/LeadStatus"
+        retryCount:
+          type: string
+        notes:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, name, phone, status, retryCount, createdAt, updatedAt]
+
+    CreateLeadRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        phone:
+          type: string
+        source:
+          type: string
+        notes:
+          type: string
+      required: [name, phone]
+
+    LeadResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        lead:
+          $ref: "#/components/schemas/Lead"
+      required: [message, lead]
+
+    SingleLeadResponse:
+      type: object
+      properties:
+        lead:
+          $ref: "#/components/schemas/Lead"
+      required: [lead]
+
+    LeadsListResponse:
+      type: object
+      properties:
+        leads:
+          type: array
+          items:
+            $ref: "#/components/schemas/Lead"
+        count:
+          type: integer
+      required: [leads, count]
+
+    CallStatus:
+      type: string
+      enum:
+        - initiated
+        - ringing
+        - answered
+        - completed
+        - no-answer
+        - busy
+        - failed
+
+    Call:
+      type: object
+      properties:
+        id:
+          type: integer
+        leadId:
+          type: integer
+        twilioCallSid:
+          type: string
+          nullable: true
+        callStatus:
+          $ref: "#/components/schemas/CallStatus"
+        duration:
+          type: integer
+          nullable: true
+        recordingUrl:
+          type: string
+          nullable: true
+        transcript:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, leadId, callStatus, createdAt, updatedAt]
+
+    InitiateCallResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        leadId:
+          type: integer
+      required: [message, leadId]
+
+    CallsListResponse:
+      type: object
+      properties:
+        calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/Call"
+        count:
+          type: integer
+      required: [calls, count]
+
+    SingleCallResponse:
+      type: object
+      properties:
+        call:
+          $ref: "#/components/schemas/Call"
+      required: [call]
+
+    DashboardStats:
+      type: object
+      properties:
+        leads:
+          type: object
+          properties:
+            total:
+              type: integer
+            byStatus:
+              type: object
+              additionalProperties:
+                type: integer
+            recent:
+              type: array
+              items:
+                $ref: "#/components/schemas/Lead"
+          required: [total, byStatus, recent]
+        calls:
+          type: object
+          properties:
+            total:
+              type: integer
+            byStatus:
+              type: object
+              additionalProperties:
+                type: integer
+            recent:
+              type: array
+              items:
+                $ref: "#/components/schemas/Call"
+          required: [total, byStatus, recent]
+        queue:
+          type: object
+          properties:
+            total:
+              type: integer
+            pending:
+              type: integer
+            scheduled:
+              type: integer
+          required: [total, pending, scheduled]
+      required: [leads, calls, queue]
+
+    AnalyzeCallResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        callId:
+          type: integer
+      required: [message, callId]

@@ -1,6 +1,8 @@
 import { Router } from "express";
 import multer from "multer";
+import type { Request, Response, NextFunction } from "express";
 import { authMiddleware } from "../../middlewares/auth.js";
+import { apiKeyMiddleware } from "../../middlewares/apikey.js";
 import {
   addLead,
   uploadLeads,
@@ -15,7 +17,20 @@ import {
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-router.post("/leads", authMiddleware, addLead);
+function jwtOrApiKey(req: Request, res: Response, next: NextFunction) {
+  const hasBearer = typeof req.headers.authorization === "string" && req.headers.authorization.startsWith("Bearer ");
+  const hasApiKey = typeof req.headers["x-api-key"] === "string";
+
+  if (hasBearer) {
+    return authMiddleware(req, res, next);
+  }
+  if (hasApiKey) {
+    return apiKeyMiddleware(req, res, next);
+  }
+  return authMiddleware(req, res, next);
+}
+
+router.post("/leads", jwtOrApiKey, addLead);
 router.post("/leads/upload", authMiddleware, upload.single("file"), uploadLeads);
 router.post("/leads/bulk", authMiddleware, bulkAction);
 router.get("/leads", authMiddleware, listLeads);

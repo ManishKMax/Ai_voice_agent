@@ -7,6 +7,10 @@ import {
   testSarvam,
   getTwilioNumbers,
   getWebhookInfo,
+  testWebhook,
+  listApiKeys,
+  createApiKey,
+  deleteApiKey,
 } from "./settings.controller.js";
 
 const router = Router();
@@ -17,5 +21,10 @@ router.post("/settings/test-twilio", requireAuth, testTwilio);
 router.post("/settings/test-sarvam", requireAuth, testSarvam);
 router.get("/settings/twilio-numbers", requireAuth, getTwilioNumbers);
 router.get("/settings/webhook-info", requireAuth, getWebhookInfo);
+router.post("/settings/test-webhook", requireAuth, testWebhook);
+
+router.get("/settings/api-keys", requireAuth, listApiKeys);
+router.post("/settings/api-keys", requireAuth, createApiKey);
+router.delete("/settings/api-keys/:keyId", requireAuth, deleteApiKey);
 
 export default router;

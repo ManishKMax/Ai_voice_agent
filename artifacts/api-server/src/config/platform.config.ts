@@ -12,9 +12,13 @@ export interface PlatformSettings {
   callRetries: number;
   callHoursStart: number;
   callHoursEnd: number;
+  retryDelay1: number;
+  retryDelay2: number;
+  retryDelay3: number;
+  webhookUrl: string;
+  webhookSecret: string;
 }
 
-/** Current runtime settings — loaded from DB on startup, updated on PATCH. */
 export let platformSettings: PlatformSettings = buildDefaults();
 
 function buildDefaults(): PlatformSettings {
@@ -23,13 +27,17 @@ function buildDefaults(): PlatformSettings {
     twilioAuthToken: config.twilio.authToken,
     twilioPhoneNumber: config.twilio.phoneNumber,
     sarvamApiKey: config.sarvam.apiKey,
-    callRetries: 1,
+    callRetries: 3,
     callHoursStart: 9,
     callHoursEnd: 20,
+    retryDelay1: 30,
+    retryDelay2: 120,
+    retryDelay3: 1440,
+    webhookUrl: "",
+    webhookSecret: "",
   };
 }
 
-/** Sync the live config object so all services pick up new credentials. */
 function applyToLiveConfig(s: PlatformSettings) {
   if (s.twilioAccountSid)  config.twilio.accountSid  = s.twilioAccountSid;
   if (s.twilioAuthToken)   config.twilio.authToken   = s.twilioAuthToken;
@@ -38,10 +46,6 @@ function applyToLiveConfig(s: PlatformSettings) {
   resetClient();
 }
 
-/**
- * Load persisted platform settings from DB on startup.
- * Overrides env-var defaults wherever a DB value exists.
- */
 export async function loadPlatformSettings(): Promise<void> {
   try {
     const rows = await db.select().from(platformSettingsTable).limit(1);
@@ -55,6 +59,11 @@ export async function loadPlatformSettings(): Promise<void> {
         callRetries:       s.callRetries       ?? platformSettings.callRetries,
         callHoursStart:    s.callHoursStart    ?? platformSettings.callHoursStart,
         callHoursEnd:      s.callHoursEnd      ?? platformSettings.callHoursEnd,
+        retryDelay1:       s.retryDelay1       ?? platformSettings.retryDelay1,
+        retryDelay2:       s.retryDelay2       ?? platformSettings.retryDelay2,
+        retryDelay3:       s.retryDelay3       ?? platformSettings.retryDelay3,
+        webhookUrl:        s.webhookUrl        ?? platformSettings.webhookUrl,
+        webhookSecret:     s.webhookSecret     ?? platformSettings.webhookSecret,
       };
       applyToLiveConfig(platformSettings);
       logger.info(
@@ -67,9 +76,6 @@ export async function loadPlatformSettings(): Promise<void> {
   }
 }
 
-/**
- * Persist updated settings to DB and apply immediately to all running services.
- */
 export async function updatePlatformSettings(patch: Partial<PlatformSettings>): Promise<PlatformSettings> {
   platformSettings = { ...platformSettings, ...patch };
 
@@ -81,6 +87,11 @@ export async function updatePlatformSettings(patch: Partial<PlatformSettings>): 
     callRetries:       platformSettings.callRetries,
     callHoursStart:    platformSettings.callHoursStart,
     callHoursEnd:      platformSettings.callHoursEnd,
+    retryDelay1:       platformSettings.retryDelay1,
+    retryDelay2:       platformSettings.retryDelay2,
+    retryDelay3:       platformSettings.retryDelay3,
+    webhookUrl:        platformSettings.webhookUrl || undefined,
+    webhookSecret:     platformSettings.webhookSecret || undefined,
   };
 
   const rows = await db.select({ id: platformSettingsTable.id }).from(platformSettingsTable).limit(1);
@@ -95,14 +106,12 @@ export async function updatePlatformSettings(patch: Partial<PlatformSettings>): 
   return platformSettings;
 }
 
-/** Mask a sensitive string: show only last 4 chars. */
 export function maskSecret(value: string): string {
   if (!value) return "";
   if (value.length <= 4) return "•".repeat(value.length);
   return "•".repeat(Math.min(value.length - 4, 16)) + value.slice(-4);
 }
 
-/** Return settings with sensitive values masked for API responses. */
 export function getMaskedSettings() {
   return {
     twilioAccountSid:  platformSettings.twilioAccountSid  ? maskSecret(platformSettings.twilioAccountSid)  : "",
@@ -112,7 +121,13 @@ export function getMaskedSettings() {
     callRetries:       platformSettings.callRetries,
     callHoursStart:    platformSettings.callHoursStart,
     callHoursEnd:      platformSettings.callHoursEnd,
+    retryDelay1:       platformSettings.retryDelay1,
+    retryDelay2:       platformSettings.retryDelay2,
+    retryDelay3:       platformSettings.retryDelay3,
+    webhookUrl:        platformSettings.webhookUrl ?? "",
+    webhookSecret:     platformSettings.webhookSecret ? maskSecret(platformSettings.webhookSecret) : "",
     twilioConnected:   !!(platformSettings.twilioAccountSid && platformSettings.twilioAuthToken),
     sarvamConnected:   !!platformSettings.sarvamApiKey,
+    webhookConfigured: !!platformSettings.webhookUrl,
   };
 }

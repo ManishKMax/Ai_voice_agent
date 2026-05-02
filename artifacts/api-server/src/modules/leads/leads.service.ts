@@ -3,18 +3,21 @@ import { db } from "@workspace/db";
 import { leadsTable, callsTable, type InsertLead, type LeadStatus, type LeadPriority } from "@workspace/db/schema";
 import { enqueueLead } from "../queue/queue.service.js";
 import { logger } from "../../lib/logger.js";
+import { fireWebhook, shouldFireWebhook, statusToEvent } from "../../services/webhook.service.js";
+import { broadcastSse } from "../../services/sse.service.js";
 
 export async function createLead(data: InsertLead) {
-  const [lead] = await db.insert(leadsTable).values(data).returning();
-  enqueueLead(lead.id);
+  const [lead] = await db.insert(leadsTable).values(data as typeof leadsTable.$inferInsert).returning();
+  enqueueLead(lead.id, 0, lead.priority);
   logger.info({ leadId: lead.id }, "Lead created and enqueued");
+  broadcastSse("lead.created", { leadId: lead.id, name: lead.name, status: lead.status });
   return lead;
 }
 
 export async function createLeadsFromCSV(rows: InsertLead[]) {
-  const leads = await db.insert(leadsTable).values(rows).returning();
+  const leads = await db.insert(leadsTable).values(rows as (typeof leadsTable.$inferInsert)[]).returning();
   for (const lead of leads) {
-    enqueueLead(lead.id);
+    enqueueLead(lead.id, 0, lead.priority);
   }
   logger.info({ count: leads.length }, "Bulk leads created and enqueued");
   return leads;
@@ -74,6 +77,18 @@ export async function updateLeadStatus(leadId: number, status: LeadStatus, notes
     .set(updateData)
     .where(eq(leadsTable.id, leadId))
     .returning();
+
+  if (updated) {
+    broadcastSse("lead.status_changed", { leadId, status, name: updated.name });
+
+    if (shouldFireWebhook(status)) {
+      const event = statusToEvent(status);
+      if (event) {
+        fireWebhook(event, updated).catch(() => {});
+      }
+    }
+  }
+
   return updated;
 }
 
@@ -93,7 +108,6 @@ export async function updateLead(
 ) {
   const patch: Record<string, unknown> = { ...data, updatedAt: new Date() };
 
-  // If manually set back to pending, re-enqueue
   if (data.status === "pending") {
     enqueueLead(id);
   }
@@ -104,12 +118,22 @@ export async function updateLead(
     .where(eq(leadsTable.id, id))
     .returning();
 
+  if (updated) {
+    broadcastSse("lead.updated", { leadId: id, changes: Object.keys(data) });
+
+    if (data.status && shouldFireWebhook(data.status)) {
+      const event = statusToEvent(data.status);
+      if (event) {
+        fireWebhook(event, updated).catch(() => {});
+      }
+    }
+  }
+
   logger.info({ leadId: id, patch: Object.keys(data) }, "Lead updated");
   return updated;
 }
 
 export async function deleteLead(id: number) {
-  // Delete related call_analysis and calls first
   await db.delete(callsTable).where(eq(callsTable.leadId, id));
   const [deleted] = await db
     .delete(leadsTable)
@@ -171,7 +195,6 @@ export async function getLeadById(id: number) {
   return lead;
 }
 
-/** Properly escape a CSV field value */
 function csvEscape(value: string | null | undefined): string {
   const str = value ?? "";
   if (/[",\r\n]/.test(str)) {
@@ -204,32 +227,28 @@ export async function exportLeadsCSV(): Promise<string> {
   return header + rows;
 }
 
-/**
- * On server startup, reset any leads stuck in "calling" back to "pending"
- * and also re-enqueue all "pending" leads that are not already in the queue.
- */
 export async function resetStuckCallingLeads() {
   const stuck = await db
     .update(leadsTable)
     .set({ status: "pending", updatedAt: new Date() })
     .where(eq(leadsTable.status, "calling"))
-    .returning({ id: leadsTable.id });
+    .returning({ id: leadsTable.id, priority: leadsTable.priority });
 
   if (stuck.length > 0) {
     logger.warn({ count: stuck.length, ids: stuck.map((l) => l.id) }, "Reset stuck calling leads on startup");
     for (const lead of stuck) {
-      enqueueLead(lead.id);
+      enqueueLead(lead.id, 0, lead.priority);
     }
   }
 
   const pendingLeads = await db
-    .select({ id: leadsTable.id })
+    .select({ id: leadsTable.id, priority: leadsTable.priority })
     .from(leadsTable)
     .where(and(eq(leadsTable.status, "pending"), eq(leadsTable.dnc, false)));
 
   let reEnqueued = 0;
   for (const lead of pendingLeads) {
-    enqueueLead(lead.id);
+    enqueueLead(lead.id, 0, lead.priority);
     reEnqueued++;
   }
 

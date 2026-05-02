@@ -361,9 +361,9 @@ export function serveAudio(req: Request, res: Response): void {
 export async function callStatusWebhook(req: Request, res: Response): Promise<void> {
   const leadId = parseInt((req.query.leadId as string) ?? "0");
   const body = req.body as Record<string, string>;
-  const { CallSid: callSid, CallStatus: callStatus, CallDuration: duration } = body;
+  const { CallSid: callSid, CallStatus: callStatus, CallDuration: duration, AnsweredBy: answeredBy } = body;
 
-  logger.info({ callSid, callStatus, leadId, duration }, "Call status webhook");
+  logger.info({ callSid, callStatus, leadId, duration, answeredBy }, "Call status webhook");
 
   if (!callSid || !callStatus) {
     logger.warn({ body }, "Call status webhook missing required fields");
@@ -380,7 +380,9 @@ export async function callStatusWebhook(req: Request, res: Response): Promise<vo
         callSid,
         callStatus,
         leadId,
-        duration ? parseInt(duration) : undefined
+        duration ? parseInt(duration) : undefined,
+        undefined,
+        answeredBy
       );
 
       if (callStatus.toLowerCase() === "completed") {

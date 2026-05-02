@@ -22,6 +22,8 @@ export const callsTable = pgTable("calls", {
   duration: integer("duration"),
   recordingUrl: text("recording_url"),
   transcript: text("transcript"),
+  interestScore: integer("interest_score"),
+  answeredBy: text("answered_by"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

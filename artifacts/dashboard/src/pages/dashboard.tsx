@@ -1,16 +1,90 @@
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useGetDashboardStats } from "@workspace/api-client-react";
 import { Link } from "wouter";
 import { format } from "date-fns";
-import { Users, PhoneCall, PhoneForwarded, Clock, ArrowRight } from "lucide-react";
+import { Users, PhoneCall, PhoneForwarded, Clock, ArrowRight, Radio, TrendingUp } from "lucide-react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LeadStatusBadge, CallStatusBadge } from "@/components/status-badge";
 
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+interface LiveEvent {
+  id: string;
+  event: string;
+  data: Record<string, unknown>;
+  ts: number;
+}
+
+function useLiveEvents() {
+  const [events, setEvents] = useState<LiveEvent[]>([]);
+  const [connected, setConnected] = useState(false);
+  const esRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    const token = localStorage.getItem("auth_token");
+    const url = `${BASE}/api/sse/events`;
+    const es = new EventSource(url);
+    esRef.current = es;
+
+    es.addEventListener("connected", () => setConnected(true));
+
+    const handleEvent = (name: string) => (e: MessageEvent) => {
+      const data = JSON.parse(e.data) as Record<string, unknown>;
+      setEvents((prev) => [
+        { id: `${name}-${Date.now()}`, event: name, data, ts: Date.now() },
+        ...prev.slice(0, 19),
+      ]);
+    };
+
+    es.addEventListener("lead.status_changed", handleEvent("lead.status_changed") as EventListener);
+    es.addEventListener("lead.created", handleEvent("lead.created") as EventListener);
+    es.addEventListener("lead.analyzed", handleEvent("lead.analyzed") as EventListener);
+
+    es.onerror = () => setConnected(false);
+
+    return () => {
+      es.close();
+      setConnected(false);
+    };
+  }, []);
+
+  return { events, connected };
+}
+
+function eventLabel(event: string, data: Record<string, unknown>): string {
+  const name = (data.name as string) ?? `Lead #${data.leadId}`;
+  switch (event) {
+    case "lead.created": return `New lead added: ${name}`;
+    case "lead.status_changed": return `${name} → ${data.status}`;
+    case "lead.analyzed": {
+      const score = data.interestScore as number;
+      return `${name} scored ${score}/100 (${data.newStatus})`;
+    }
+    default: return event;
+  }
+}
+
+function eventColor(event: string, data: Record<string, unknown>): string {
+  if (event === "lead.created") return "bg-blue-500";
+  if (event === "lead.analyzed") {
+    const score = (data.interestScore as number) ?? 0;
+    if (score >= 70) return "bg-emerald-500";
+    if (score >= 40) return "bg-yellow-500";
+    return "bg-red-400";
+  }
+  const status = data.status as string;
+  if (status === "interested") return "bg-emerald-500";
+  if (status === "calling") return "bg-blue-500";
+  if (status === "not_interested" || status === "dnc") return "bg-red-400";
+  return "bg-muted-foreground";
+}
+
 export default function Dashboard() {
   const { data: stats, isLoading, isError } = useGetDashboardStats();
+  const { events, connected } = useLiveEvents();
 
   if (isLoading) {
     return (
@@ -28,24 +102,6 @@ export default function Dashboard() {
             </Card>
           ))}
         </div>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-          <Card className="col-span-4">
-            <CardHeader>
-              <Skeleton className="h-5 w-[150px]" />
-            </CardHeader>
-            <CardContent>
-              <Skeleton className="h-[300px] w-full" />
-            </CardContent>
-          </Card>
-          <Card className="col-span-3">
-            <CardHeader>
-              <Skeleton className="h-5 w-[150px]" />
-            </CardHeader>
-            <CardContent>
-              <Skeleton className="h-[300px] w-full" />
-            </CardContent>
-          </Card>
-        </div>
       </div>
     );
   }
@@ -59,10 +115,26 @@ export default function Dashboard() {
     );
   }
 
+  const conversionRate = stats.leads.total > 0
+    ? Math.round(((stats.leads.byStatus.interested || 0) / stats.leads.total) * 100)
+    : 0;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">Overview</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Overview</h1>
+          <span
+            className={`flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full font-medium ${
+              connected
+                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                : "bg-muted text-muted-foreground"
+            }`}
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-500 animate-pulse" : "bg-muted-foreground"}`} />
+            {connected ? "Live" : "Offline"}
+          </span>
+        </div>
         <div className="flex gap-2">
           <Link href="/leads">
             <Button variant="outline" size="sm">Manage Leads</Button>
@@ -94,7 +166,7 @@ export default function Dashboard() {
           <CardContent>
             <div className="text-2xl font-bold">{stats.calls.total}</div>
             <p className="text-xs text-muted-foreground mt-1">
-              {stats.calls.byStatus.completed || 0} completed calls
+              {stats.calls.byStatus.completed || 0} completed
             </p>
           </CardContent>
         </Card>
@@ -114,13 +186,13 @@ export default function Dashboard() {
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Call Queue</CardTitle>
-            <Clock className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-medium">Conversion Rate</CardTitle>
+            <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats.queue.total}</div>
+            <div className="text-2xl font-bold">{conversionRate}%</div>
             <p className="text-xs text-muted-foreground mt-1">
-              {stats.queue.pending} pending, {stats.queue.scheduled} scheduled
+              {stats.queue.total} in queue ({stats.queue.pending} ready)
             </p>
           </CardContent>
         </Card>
@@ -168,6 +240,42 @@ export default function Dashboard() {
 
         <Card className="col-span-3">
           <CardHeader className="flex flex-row items-center justify-between">
+            <div className="space-y-1 flex items-center gap-2">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Radio className="h-4 w-4 text-blue-500" />
+                  Live Activity
+                </CardTitle>
+                <CardDescription>Real-time call & lead events.</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {events.length === 0 ? (
+              <div className="py-8 text-center text-sm text-muted-foreground space-y-1">
+                <Radio className="h-6 w-6 mx-auto mb-2 text-muted-foreground/50" />
+                <p>{connected ? "Watching for events…" : "Connecting to event stream…"}</p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                {events.map((ev) => (
+                  <div key={ev.id} className="flex items-start gap-2.5 text-sm">
+                    <span className={`mt-1.5 h-2 w-2 rounded-full flex-shrink-0 ${eventColor(ev.event, ev.data)}`} />
+                    <div className="min-w-0">
+                      <p className="text-foreground leading-tight">{eventLabel(ev.event, ev.data)}</p>
+                      <p className="text-xs text-muted-foreground">{format(new Date(ev.ts), "h:mm:ss a")}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
+        <Card className="col-span-4">
+          <CardHeader className="flex flex-row items-center justify-between">
             <div className="space-y-1">
               <CardTitle>Recent Calls</CardTitle>
               <CardDescription>Latest outbound activity.</CardDescription>
@@ -201,6 +309,49 @@ export default function Dashboard() {
                 ))}
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        <Card className="col-span-3">
+          <CardHeader>
+            <CardTitle>Lead Status Breakdown</CardTitle>
+            <CardDescription>Distribution across all statuses.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {Object.entries(stats.leads.byStatus)
+                .filter(([, count]) => (count as number) > 0)
+                .sort(([, a], [, b]) => (b as number) - (a as number))
+                .map(([status, count]) => {
+                  const pct = stats.leads.total > 0
+                    ? Math.round(((count as number) / stats.leads.total) * 100)
+                    : 0;
+                  const colorMap: Record<string, string> = {
+                    interested: "bg-emerald-500",
+                    pending: "bg-blue-500",
+                    calling: "bg-yellow-500",
+                    completed: "bg-gray-400",
+                    not_interested: "bg-red-400",
+                    no_response: "bg-orange-400",
+                    callback: "bg-purple-500",
+                    dnc: "bg-red-600",
+                  };
+                  return (
+                    <div key={status} className="space-y-1">
+                      <div className="flex justify-between text-xs">
+                        <span className="capitalize text-muted-foreground">{status.replace("_", " ")}</span>
+                        <span className="font-medium">{count as number}</span>
+                      </div>
+                      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${colorMap[status] ?? "bg-muted-foreground"}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
           </CardContent>
         </Card>
       </div>

@@ -3,7 +3,15 @@ import { db } from "@workspace/db";
 import { callsTable, callAnalysisTable, leadsTable } from "@workspace/db/schema";
 import { analyzeTranscript } from "../../services/sarvam.service.js";
 import { dequeueLeadJobs } from "../queue/queue.service.js";
+import { broadcastSse } from "../../services/sse.service.js";
 import { logger } from "../../lib/logger.js";
+
+function interestLevelToScore(interest: string, nextAction: string): number {
+  if (interest === "high" || nextAction === "demo") return 85;
+  if (interest === "medium" || nextAction === "follow_up") return 55;
+  if (interest === "low" && nextAction !== "drop") return 30;
+  return 10;
+}
 
 export async function analyzeCallAndUpdateLead(callId: number): Promise<void> {
   const [call] = await db
@@ -30,7 +38,13 @@ export async function analyzeCallAndUpdateLead(callId: number): Promise<void> {
 
   const result = await analyzeTranscript(call.transcript);
 
-  // Upsert analysis record (idempotent if re-triggered)
+  const interestScore = interestLevelToScore(result.interest, result.nextAction);
+
+  await db
+    .update(callsTable)
+    .set({ interestScore, updatedAt: new Date() })
+    .where(eq(callsTable.id, callId));
+
   await db
     .insert(callAnalysisTable)
     .values({
@@ -42,7 +56,6 @@ export async function analyzeCallAndUpdateLead(callId: number): Promise<void> {
     })
     .onConflictDoNothing();
 
-  // Determine final lead status from AI result
   const newStatus =
     result.interest === "high" || result.nextAction === "demo"
       ? "interested"
@@ -55,13 +68,20 @@ export async function analyzeCallAndUpdateLead(callId: number): Promise<void> {
     .set({ status: newStatus, updatedAt: new Date() })
     .where(eq(leadsTable.id, call.leadId));
 
-  // Terminal state — remove any pending retry jobs for this lead
+  broadcastSse("lead.analyzed", {
+    leadId: call.leadId,
+    callId,
+    interestScore,
+    interest: result.interest,
+    newStatus,
+  });
+
   if (newStatus === "interested" || newStatus === "not_interested") {
     dequeueLeadJobs(call.leadId);
   }
 
   logger.info(
-    { callId, leadId: call.leadId, interest: result.interest, nextAction: result.nextAction, newStatus },
+    { callId, leadId: call.leadId, interest: result.interest, nextAction: result.nextAction, newStatus, interestScore },
     "AI analysis complete — lead status updated"
   );
 }

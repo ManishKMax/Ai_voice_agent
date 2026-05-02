@@ -4,7 +4,6 @@ import { logger } from "../lib/logger.js";
 
 let _client: ReturnType<typeof twilio> | null = null;
 
-/** Called by platform.config.ts when credentials are updated at runtime. */
 export function resetClient() {
   _client = null;
 }
@@ -36,21 +35,16 @@ export async function initiateCall(toPhone: string, leadId: number): Promise<str
     statusCallback: statusCallbackUrl,
     statusCallbackMethod: "POST",
     statusCallbackEvent: ["initiated", "ringing", "answered", "completed", "no-answer", "busy", "failed"],
+    machineDetection: "Enable",
+    machineDetectionTimeout: 5,
+    asyncAmdStatusCallback: statusCallbackUrl,
+    asyncAmdStatusCallbackMethod: "POST",
   });
 
   logger.info({ callSid: call.sid, leadId }, "Twilio call created");
   return call.sid;
 }
 
-/**
- * Initial TwiML — plays the agent's greeting then gathers speech.
- *
- * Changes vs old version:
- * - callSid removed from action URL (Twilio always sends CallSid in POST body)
- * - enhanced="true" removed (adds latency, hurts Indian accent recognition)
- * - speechTimeout="auto" (ML-based end-of-speech, better for Indian accents)
- * - timeout="15" (more time for lead to start speaking after greeting)
- */
 export function generateInitialTwiML(
   leadId: number,
   audioId: string,
@@ -72,13 +66,6 @@ export function generateInitialTwiML(
 </Response>`;
 }
 
-/**
- * Immediate filler TwiML — returned within milliseconds of receiving speech.
- * Plays a natural acknowledgement using Twilio's built-in Polly voice (no API call),
- * then redirects to /api/voice/respond where the real AI response is waiting.
- *
- * This eliminates dead-air silence during the 5-7 second AI + TTS processing window.
- */
 export function generateFillerTwiML(
   leadId: number,
   turn: number,
@@ -86,7 +73,6 @@ export function generateFillerTwiML(
   fillerText: string,
   language: string
 ): string {
-  // Use Polly.Aditi for all Indian languages — she handles both English and Hindi
   const voice = "Polly.Aditi";
 
   const respondUrl = escapeUrl(
@@ -100,10 +86,6 @@ export function generateFillerTwiML(
 </Response>`;
 }
 
-/**
- * Respond TwiML — served after the background AI job has finished.
- * Plays the Sarvam TTS audio then gathers the next speech turn.
- */
 export function generateRespondTwiML(
   leadId: number,
   turn: number,
@@ -126,9 +108,6 @@ export function generateRespondTwiML(
 </Response>`;
 }
 
-/**
- * End-of-call TwiML — plays farewell and hangs up.
- */
 export function generateEndCallTwiML(audioId: string): string {
   const audioUrl = `${config.baseUrl}/api/voice/audio/${audioId}`;
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -138,9 +117,13 @@ export function generateEndCallTwiML(audioId: string): string {
 </Response>`;
 }
 
-/**
- * Fallback TwiML using Twilio <Say> when Sarvam TTS is unavailable.
- */
+export function generateVoicemailTwiML(): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Hangup/>
+</Response>`;
+}
+
 export function generateSayTwiML(
   text: string,
   language: string,
@@ -173,7 +156,6 @@ export function generateSayTwiML(
 </Response>`;
 }
 
-/** Escape text content for XML. */
 function escapeXml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -183,14 +165,10 @@ function escapeXml(text: string): string {
     .replace(/'/g, "&apos;");
 }
 
-/** Escape a URL for use in an XML attribute (& → &amp;). */
 function escapeUrl(url: string): string {
   return url.replace(/&/g, "&amp;");
 }
 
-/**
- * Validate that an incoming request is genuinely from Twilio.
- */
 export function validateTwilioSignature(
   url: string,
   params: Record<string, string>,

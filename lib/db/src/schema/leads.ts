@@ -41,8 +41,6 @@ export const insertLeadSchema = createInsertSchema(leadsTable).omit({
   status: true,
   retryCount: true,
   dnc: true,
-  tags: true,
-  priority: true,
 });
 export type InsertLead = z.infer<typeof insertLeadSchema>;
 export type Lead = typeof leadsTable.$inferSelect;

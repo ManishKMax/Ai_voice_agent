@@ -29,7 +29,7 @@ function parseLeadStatus(raw: string | undefined) {
 
 export async function addLead(req: AuthRequest, res: Response): Promise<void> {
   try {
-    const { name, phone, source, notes } = req.body as Record<string, string>;
+    const { name, phone, source, sourceId, notes, tags, priority } = req.body as Record<string, string>;
 
     if (!name || !phone) {
       res.status(400).json({ error: "name and phone are required" });
@@ -43,7 +43,15 @@ export async function addLead(req: AuthRequest, res: Response): Promise<void> {
       return;
     }
 
-    const lead = await createLead({ name: name.trim(), phone: phone.trim(), source, notes });
+    const lead = await createLead({
+      name: name.trim(),
+      phone: phone.trim(),
+      source,
+      sourceId,
+      notes,
+      tags,
+      priority: priority ? (parseInt(priority) as LeadPriority) : undefined,
+    });
     res.status(201).json({ message: "Lead created", lead });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Failed to create lead";

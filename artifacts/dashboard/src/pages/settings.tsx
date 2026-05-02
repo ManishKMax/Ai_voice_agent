@@ -16,7 +16,11 @@ import {
   Copy,
   RefreshCw,
   Clock,
-  RotateCcw,
+  Key,
+  Plus,
+  Trash2,
+  Send,
+  Zap,
 } from "lucide-react";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -44,14 +48,28 @@ interface SettingsData {
   callRetries: number;
   callHoursStart: number;
   callHoursEnd: number;
+  retryDelay1: number;
+  retryDelay2: number;
+  retryDelay3: number;
+  webhookUrl: string;
+  webhookSecret: string;
   twilioConnected: boolean;
   sarvamConnected: boolean;
+  webhookConfigured: boolean;
 }
 
 interface WebhookInfo {
   baseUrl: string;
   voiceWebhookUrl: string;
   statusCallbackUrl: string;
+}
+
+interface ApiKeyRecord {
+  id: number;
+  name: string;
+  keyPrefix: string;
+  createdAt: string;
+  lastUsedAt: string | null;
 }
 
 function StatusBadge({ status, connected }: { status: ConnectionStatus; connected?: boolean }) {
@@ -176,6 +194,13 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+function hourLabel(h: number): string {
+  if (h === 0) return "12:00 AM";
+  if (h < 12) return `${h}:00 AM`;
+  if (h === 12) return "12:00 PM";
+  return `${h - 12}:00 PM`;
+}
+
 export default function Settings() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
@@ -186,43 +211,68 @@ export default function Settings() {
     twilioAuthToken: "",
     twilioPhoneNumber: "",
     sarvamApiKey: "",
-    callRetries: 1,
+    callRetries: 3,
     callHoursStart: 9,
     callHoursEnd: 20,
+    retryDelay1: 30,
+    retryDelay2: 120,
+    retryDelay3: 1440,
+    webhookUrl: "",
+    webhookSecret: "",
   });
 
   const [currentStatus, setCurrentStatus] = useState<{
     twilioConnected: boolean;
     sarvamConnected: boolean;
-  }>({ twilioConnected: false, sarvamConnected: false });
+    webhookConfigured: boolean;
+  }>({ twilioConnected: false, sarvamConnected: false, webhookConfigured: false });
 
   const [twilioStatus, setTwilioStatus] = useState<ConnectionStatus>("idle");
   const [sarvamStatus, setSarvamStatus] = useState<ConnectionStatus>("idle");
+  const [webhookTestStatus, setWebhookTestStatus] = useState<ConnectionStatus>("idle");
   const [twilioMessage, setTwilioMessage] = useState("");
   const [sarvamMessage, setSarvamMessage] = useState("");
+  const [webhookMessage, setWebhookMessage] = useState("");
 
   const [webhookInfo, setWebhookInfo] = useState<WebhookInfo | null>(null);
   const [twilioNumbers, setTwilioNumbers] = useState<{ phoneNumber: string; friendlyName: string }[]>([]);
+
+  const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
+  const [newKeyName, setNewKeyName] = useState("");
+  const [creatingKey, setCreatingKey] = useState(false);
+  const [newKeyValue, setNewKeyValue] = useState<string | null>(null);
+  const [deletingKeyId, setDeletingKeyId] = useState<number | null>(null);
 
   useEffect(() => {
     Promise.all([
       apiFetch("/api/settings"),
       apiFetch("/api/settings/webhook-info"),
-    ]).then(([settingsRes, webhookRes]) => {
+      apiFetch("/api/settings/api-keys"),
+    ]).then(([settingsRes, webhookRes, keysRes]) => {
       if (settingsRes.success) {
         const d: SettingsData = settingsRes.data;
-        setCurrentStatus({ twilioConnected: d.twilioConnected, sarvamConnected: d.sarvamConnected });
+        setCurrentStatus({
+          twilioConnected: d.twilioConnected,
+          sarvamConnected: d.sarvamConnected,
+          webhookConfigured: d.webhookConfigured,
+        });
         setForm({
           twilioAccountSid: "",
           twilioAuthToken: "",
           twilioPhoneNumber: d.twilioPhoneNumber ?? "",
           sarvamApiKey: "",
-          callRetries: d.callRetries ?? 1,
+          callRetries: d.callRetries ?? 3,
           callHoursStart: d.callHoursStart ?? 9,
           callHoursEnd: d.callHoursEnd ?? 20,
+          retryDelay1: d.retryDelay1 ?? 30,
+          retryDelay2: d.retryDelay2 ?? 120,
+          retryDelay3: d.retryDelay3 ?? 1440,
+          webhookUrl: d.webhookUrl ?? "",
+          webhookSecret: "",
         });
       }
       if (webhookRes.success) setWebhookInfo(webhookRes.data);
+      if (keysRes.success) setApiKeys(keysRes.data ?? []);
       setLoading(false);
     });
   }, []);
@@ -238,11 +288,16 @@ export default function Settings() {
         callRetries: form.callRetries,
         callHoursStart: form.callHoursStart,
         callHoursEnd: form.callHoursEnd,
+        retryDelay1: form.retryDelay1,
+        retryDelay2: form.retryDelay2,
+        retryDelay3: form.retryDelay3,
+        webhookUrl: form.webhookUrl,
       };
       if (form.twilioAccountSid) payload.twilioAccountSid = form.twilioAccountSid;
       if (form.twilioAuthToken)  payload.twilioAuthToken  = form.twilioAuthToken;
       if (form.twilioPhoneNumber) payload.twilioPhoneNumber = form.twilioPhoneNumber;
       if (form.sarvamApiKey)     payload.sarvamApiKey     = form.sarvamApiKey;
+      if (form.webhookSecret)    payload.webhookSecret    = form.webhookSecret;
 
       const res = await apiFetch("/api/settings", {
         method: "PATCH",
@@ -250,9 +305,13 @@ export default function Settings() {
       });
 
       if (res.success) {
-        setCurrentStatus({ twilioConnected: res.data.twilioConnected, sarvamConnected: res.data.sarvamConnected });
-        setForm((f) => ({ ...f, twilioAccountSid: "", twilioAuthToken: "", sarvamApiKey: "" }));
-        toast({ title: "Settings saved", description: "Credentials are now active for all new calls." });
+        setCurrentStatus({
+          twilioConnected: res.data.twilioConnected,
+          sarvamConnected: res.data.sarvamConnected,
+          webhookConfigured: res.data.webhookConfigured,
+        });
+        setForm((f) => ({ ...f, twilioAccountSid: "", twilioAuthToken: "", sarvamApiKey: "", webhookSecret: "" }));
+        toast({ title: "Settings saved", description: "All changes are now active." });
       } else {
         toast({ title: "Save failed", description: res.message ?? "Unknown error", variant: "destructive" });
       }
@@ -286,10 +345,56 @@ export default function Settings() {
     setSarvamMessage(res.message ?? "");
   }
 
+  async function handleTestWebhook() {
+    setWebhookTestStatus("testing");
+    setWebhookMessage("");
+    const res = await apiFetch("/api/settings/test-webhook", {
+      method: "POST",
+      body: JSON.stringify({ webhookUrl: form.webhookUrl || undefined }),
+    });
+    setWebhookTestStatus(res.success ? "ok" : "error");
+    setWebhookMessage(res.message ?? "");
+  }
+
   async function loadTwilioNumbers() {
     const res = await apiFetch("/api/settings/twilio-numbers");
     if (res.success) setTwilioNumbers(res.data);
     else toast({ title: "Could not fetch numbers", description: res.message, variant: "destructive" });
+  }
+
+  async function handleCreateKey() {
+    if (!newKeyName.trim()) return;
+    setCreatingKey(true);
+    try {
+      const res = await apiFetch("/api/settings/api-keys", {
+        method: "POST",
+        body: JSON.stringify({ name: newKeyName.trim() }),
+      });
+      if (res.success) {
+        setNewKeyValue(res.data.key);
+        setNewKeyName("");
+        setApiKeys((prev) => [
+          ...prev,
+          { id: res.data.id, name: res.data.name, keyPrefix: res.data.keyPrefix, createdAt: res.data.createdAt, lastUsedAt: null },
+        ]);
+        toast({ title: "API key created", description: res.message });
+      } else {
+        toast({ title: "Failed", description: res.message, variant: "destructive" });
+      }
+    } finally {
+      setCreatingKey(false);
+    }
+  }
+
+  async function handleDeleteKey(id: number) {
+    setDeletingKeyId(id);
+    try {
+      await apiFetch(`/api/settings/api-keys/${id}`, { method: "DELETE" });
+      setApiKeys((prev) => prev.filter((k) => k.id !== id));
+      toast({ title: "API key revoked" });
+    } finally {
+      setDeletingKeyId(null);
+    }
   }
 
   if (loading) {
@@ -302,12 +407,11 @@ export default function Settings() {
 
   return (
     <div className="space-y-8 max-w-3xl">
-      {/* Header */}
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Integrations & Settings</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Configure your API credentials. Changes take effect immediately — no server restart needed.
+            Configure credentials and call behaviour. Changes take effect immediately.
           </p>
         </div>
         <button
@@ -375,7 +479,6 @@ export default function Settings() {
                   type="button"
                   onClick={loadTwilioNumbers}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-md border border-border text-sm hover:bg-accent transition-colors"
-                  title="Load numbers from your Twilio account"
                 >
                   <RefreshCw className="h-3.5 w-3.5" /> Load from Twilio
                 </button>
@@ -397,7 +500,6 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Test button */}
           <div className="flex items-center gap-3 pt-1">
             <button
               onClick={handleTestTwilio}
@@ -481,12 +583,12 @@ export default function Settings() {
           </div>
         </div>
 
-        <div className="p-6 space-y-5">
+        <div className="p-6 space-y-6">
           {/* Calling hours */}
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">Allowed calling hours</label>
-            <p className="text-xs text-muted-foreground">Calls queued outside this window will wait until the window opens.</p>
-            <div className="flex items-center gap-3">
+            <p className="text-xs text-muted-foreground">Calls queued outside this window are held until it opens. Voicemail retries also respect this window.</p>
+            <div className="flex items-center gap-3 flex-wrap">
               <div className="space-y-1">
                 <span className="text-xs text-muted-foreground">From</span>
                 <select
@@ -495,7 +597,7 @@ export default function Settings() {
                   className="block rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                 >
                   {Array.from({ length: 24 }, (_, i) => (
-                    <option key={i} value={i}>{i === 0 ? "12:00 AM" : i < 12 ? `${i}:00 AM` : i === 12 ? "12:00 PM" : `${i - 12}:00 PM`}</option>
+                    <option key={i} value={i}>{hourLabel(i)}</option>
                   ))}
                 </select>
               </div>
@@ -508,7 +610,7 @@ export default function Settings() {
                   className="block rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                 >
                   {Array.from({ length: 24 }, (_, i) => (
-                    <option key={i} value={i}>{i === 0 ? "12:00 AM" : i < 12 ? `${i}:00 AM` : i === 12 ? "12:00 PM" : `${i - 12}:00 PM`}</option>
+                    <option key={i} value={i}>{hourLabel(i)}</option>
                   ))}
                 </select>
               </div>
@@ -517,8 +619,8 @@ export default function Settings() {
 
           {/* Retry attempts */}
           <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">Retry attempts on no-answer</label>
-            <p className="text-xs text-muted-foreground">How many times to retry a lead that didn't pick up.</p>
+            <label className="text-sm font-medium text-foreground">Max retry attempts on no-answer / voicemail</label>
+            <p className="text-xs text-muted-foreground">How many times to retry a lead that didn't pick up or went to voicemail.</p>
             <div className="flex items-center gap-3">
               {[0, 1, 2, 3].map((n) => (
                 <button
@@ -536,10 +638,201 @@ export default function Settings() {
               <span className="text-xs text-muted-foreground ml-1">retries</span>
             </div>
           </div>
+
+          {/* Retry delays */}
+          <div className="space-y-3">
+            <div>
+              <label className="text-sm font-medium text-foreground">Retry backoff delays</label>
+              <p className="text-xs text-muted-foreground mt-0.5">How long to wait before each retry attempt (in minutes).</p>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              {(["retryDelay1", "retryDelay2", "retryDelay3"] as const).map((field, i) => (
+                <div key={field} className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground">Retry {i + 1}</label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={1}
+                      max={10080}
+                      value={form[field]}
+                      onChange={(e) => setField(field, Number(e.target.value))}
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">min</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {form[field] < 60
+                      ? `${form[field]}m`
+                      : form[field] < 1440
+                        ? `${(form[field] / 60).toFixed(1)}h`
+                        : `${(form[field] / 1440).toFixed(1)}d`}
+                  </p>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              {[
+                { label: "Quick (30m / 2h / 8h)", values: [30, 120, 480] },
+                { label: "Standard (1h / 4h / 24h)", values: [60, 240, 1440] },
+                { label: "Gentle (4h / 24h / 72h)", values: [240, 1440, 4320] },
+              ].map(({ label, values }) => (
+                <button
+                  key={label}
+                  onClick={() => {
+                    setField("retryDelay1", values[0]);
+                    setField("retryDelay2", values[1]);
+                    setField("retryDelay3", values[2]);
+                  }}
+                  className="px-2.5 py-1 rounded text-xs border border-border hover:bg-accent transition-colors"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </section>
 
-      {/* Webhook Info Section */}
+      {/* Outbound Webhook Section */}
+      <section className="rounded-xl border border-border bg-card shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-card">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-lg bg-orange-50 dark:bg-orange-950 flex items-center justify-center">
+              <Zap className="h-4 w-4 text-orange-600" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-foreground">CRM Webhook</h2>
+              <p className="text-xs text-muted-foreground">Push lead outcomes to your CRM or automation tool</p>
+            </div>
+          </div>
+          <StatusBadge status={webhookTestStatus} connected={currentStatus.webhookConfigured} />
+        </div>
+
+        <div className="p-6 space-y-5">
+          <div className="flex items-start gap-2 rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 p-3 text-sm text-blue-700 dark:text-blue-300">
+            <Shield className="h-4 w-4 mt-0.5 flex-shrink-0" />
+            <span>
+              A POST request is sent to your URL whenever a lead reaches a terminal status:
+              <strong> interested, not interested, callback, completed, DNC, no response</strong>.
+              An HMAC-SHA256 signature is included in <code className="text-xs">X-Webhook-Signature</code> when a secret is configured.
+            </span>
+          </div>
+
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">Webhook URL</label>
+              <input
+                type="url"
+                value={form.webhookUrl}
+                onChange={(e) => setField("webhookUrl", e.target.value)}
+                placeholder="https://your-crm.com/webhooks/lead-outcome"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring placeholder:text-muted-foreground"
+              />
+            </div>
+            <SecretInput
+              label="Signing Secret (optional)"
+              value={form.webhookSecret}
+              onChange={(v) => setField("webhookSecret", v)}
+              placeholder="Leave blank to keep existing secret"
+            />
+          </div>
+
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              onClick={handleTestWebhook}
+              disabled={webhookTestStatus === "testing" || !form.webhookUrl}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border text-sm hover:bg-accent disabled:opacity-60 transition-colors"
+            >
+              {webhookTestStatus === "testing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+              Send Test Payload
+            </button>
+            {webhookMessage && (
+              <p className={`text-sm ${webhookTestStatus === "ok" ? "text-green-600" : "text-red-500"}`}>
+                {webhookMessage}
+              </p>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* API Keys Section */}
+      <section className="rounded-xl border border-border bg-card shadow-sm overflow-hidden">
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-border bg-card">
+          <div className="h-9 w-9 rounded-lg bg-emerald-50 dark:bg-emerald-950 flex items-center justify-center">
+            <Key className="h-4 w-4 text-emerald-600" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-foreground">API Keys</h2>
+            <p className="text-xs text-muted-foreground">Allow external systems to create leads via REST API</p>
+          </div>
+        </div>
+
+        <div className="p-6 space-y-5">
+          <div className="flex items-start gap-2 rounded-md bg-muted/40 border border-border p-3 text-sm text-muted-foreground">
+            <Shield className="h-4 w-4 mt-0.5 flex-shrink-0 text-foreground" />
+            <span>
+              Send the key in the <code className="text-xs text-foreground">X-API-Key</code> header when calling{" "}
+              <code className="text-xs text-foreground">POST /api/leads</code>. Keys are hashed — copy each key when created.
+            </span>
+          </div>
+
+          {newKeyValue && (
+            <div className="rounded-md border border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 p-4 space-y-2">
+              <p className="text-sm font-medium text-emerald-800 dark:text-emerald-200">New API key — copy it now, it won't be shown again:</p>
+              <div className="flex items-center gap-2 bg-white dark:bg-card rounded border border-border px-3 py-2">
+                <code className="flex-1 text-xs font-mono text-foreground break-all">{newKeyValue}</code>
+                <CopyButton text={newKeyValue} />
+              </div>
+              <button onClick={() => setNewKeyValue(null)} className="text-xs text-muted-foreground hover:text-foreground underline">Dismiss</button>
+            </div>
+          )}
+
+          {apiKeys.length > 0 && (
+            <div className="rounded-md border border-border divide-y divide-border">
+              {apiKeys.map((key) => (
+                <div key={key.id} className="flex items-center justify-between px-4 py-3">
+                  <div>
+                    <p className="text-sm font-medium">{key.name}</p>
+                    <p className="text-xs text-muted-foreground font-mono">
+                      {key.keyPrefix}••••••••
+                      {key.lastUsedAt ? ` · Last used ${new Date(key.lastUsedAt).toLocaleDateString()}` : " · Never used"}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleDeleteKey(key.id)}
+                    disabled={deletingKeyId === key.id}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 rounded transition-colors disabled:opacity-60"
+                  >
+                    {deletingKeyId === key.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                    Revoke
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={newKeyName}
+              onChange={(e) => setNewKeyName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleCreateKey()}
+              placeholder="Key name (e.g. CRM Integration)"
+              className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring placeholder:text-muted-foreground"
+            />
+            <button
+              onClick={handleCreateKey}
+              disabled={creatingKey || !newKeyName.trim()}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-60 transition-colors"
+            >
+              {creatingKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+              Create Key
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* Twilio Webhook URLs Section */}
       {webhookInfo && (
         <section className="rounded-xl border border-border bg-card shadow-sm overflow-hidden">
           <div className="flex items-center gap-3 px-6 py-4 border-b border-border bg-card">
@@ -547,16 +840,12 @@ export default function Settings() {
               <Webhook className="h-4 w-4 text-green-600" />
             </div>
             <div>
-              <h2 className="font-semibold text-foreground">Webhook URLs</h2>
+              <h2 className="font-semibold text-foreground">Twilio Webhook URLs</h2>
               <p className="text-xs text-muted-foreground">Configure these in your Twilio console for inbound calls</p>
             </div>
           </div>
 
           <div className="p-6 space-y-4">
-            <p className="text-sm text-muted-foreground">
-              If you want to receive <strong>inbound calls</strong> to your Twilio number, paste the URL below into
-              the <strong>Voice Configuration</strong> of your Twilio phone number.
-            </p>
             <div className="space-y-3">
               {[
                 { label: "Voice Webhook (A call comes in)", value: webhookInfo.voiceWebhookUrl },
@@ -574,22 +863,21 @@ export default function Settings() {
             <div className="flex items-start gap-2 rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 p-3 text-sm text-blue-700 dark:text-blue-300">
               <Shield className="h-4 w-4 mt-0.5 flex-shrink-0" />
               <span>
-                <strong>Note:</strong> Outbound calls (initiated from your dashboard) automatically use these URLs — no manual configuration needed for that flow.
+                Outbound calls (initiated from your dashboard) automatically use these URLs — no manual configuration needed.
               </span>
             </div>
           </div>
         </section>
       )}
 
-      {/* Save button at bottom too */}
-      <div className="flex justify-end">
+      <div className="flex justify-end pb-8">
         <button
           onClick={handleSave}
           disabled={saving}
-          className="flex items-center gap-2 bg-primary text-primary-foreground px-5 py-2.5 rounded-md text-sm font-medium hover:bg-primary/90 disabled:opacity-60 transition-colors"
+          className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-md text-sm font-medium hover:bg-primary/90 disabled:opacity-60 transition-colors"
         >
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-          Save All Changes
+          Save Changes
         </button>
       </div>
     </div>

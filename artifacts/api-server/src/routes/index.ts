@@ -8,6 +8,7 @@ import dashboardRouter from "../modules/dashboard/dashboard.routes.js";
 import aiRouter from "../modules/ai/ai.routes.js";
 import agentRouter from "../modules/agent/agent.routes.js";
 import settingsRouter from "../modules/settings/settings.routes.js";
+import sseRouter from "../modules/sse/sse.routes.js";
 
 const router: IRouter = Router();
 
@@ -20,5 +21,6 @@ router.use(dashboardRouter);
 router.use(aiRouter);
 router.use(agentRouter);
 router.use(settingsRouter);
+router.use(sseRouter);
 
 export default router;

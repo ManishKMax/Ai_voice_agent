@@ -4,6 +4,7 @@ import { callsTable, leadsTable, type CallStatus } from "@workspace/db/schema";
 import { initiateCall } from "../../services/twilio.service.js";
 import { updateLeadStatus } from "../leads/leads.service.js";
 import { enqueueLead, dequeueLeadJobs } from "../queue/queue.service.js";
+import { platformSettings } from "../../config/platform.config.js";
 import { logger } from "../../lib/logger.js";
 
 export async function triggerCallForLead(leadId: number): Promise<void> {
@@ -23,7 +24,12 @@ export async function triggerCallForLead(leadId: number): Promise<void> {
     return;
   }
 
-  // Mark as calling first to prevent duplicate triggers
+  if (lead.dnc) {
+    logger.info({ leadId }, "Skipping call — lead is on DNC list");
+    dequeueLeadJobs(leadId);
+    return;
+  }
+
   await updateLeadStatus(leadId, "calling");
 
   const [call] = await db
@@ -41,13 +47,12 @@ export async function triggerCallForLead(leadId: number): Promise<void> {
   } catch (err) {
     const twilioCode = (err as Record<string, unknown>)?.code as number | undefined;
 
-    // 21219 = unverified destination (trial account) — permanent, never retry
     if (twilioCode === 21219) {
       logger.warn({ leadId, callDbId: call.id }, "Twilio error 21219: unverified destination — marking lead no_response permanently");
       await db.delete(callsTable).where(eq(callsTable.id, call.id));
       await updateLeadStatus(leadId, "no_response");
       dequeueLeadJobs(leadId);
-      return; // Don't throw — no retry
+      return;
     }
 
     logger.error({ err, leadId, callDbId: call.id }, "Failed to initiate Twilio call — reverting lead to pending");
@@ -62,20 +67,19 @@ export async function handleCallStatusUpdate(
   callStatus: string,
   leadId: number,
   duration?: number,
-  recordingUrl?: string
+  recordingUrl?: string,
+  answeredBy?: string
 ): Promise<typeof callsTable.$inferSelect | undefined> {
   const status = callStatus.toLowerCase() as CallStatus;
 
   logger.info({ twilioCallSid, status, leadId }, "Handling call status update");
 
-  // Try to find the call row by SID
   let [callRow] = await db
     .select()
     .from(callsTable)
     .where(eq(callsTable.twilioCallSid, twilioCallSid))
     .limit(1);
 
-  // Race condition guard: "initiated" webhook may arrive before we write the SID.
   if (!callRow && status === "initiated") {
     const [fallback] = await db
       .select()
@@ -99,24 +103,53 @@ export async function handleCallStatusUpdate(
     return;
   }
 
-  // Update the call record
   const [updated] = await db
     .update(callsTable)
     .set({
       callStatus: status,
       ...(duration !== undefined && { duration }),
       ...(recordingUrl && { recordingUrl }),
+      ...(answeredBy && { answeredBy }),
       updatedAt: new Date(),
     })
     .where(eq(callsTable.id, callRow.id))
     .returning();
 
   if (status === "completed") {
-    // Do NOT set lead status to "completed" here unconditionally.
-    // The AI analysis (triggered from the media stream stop event) is the
-    // authoritative source of the final lead status (interested / not_interested / completed).
-    // Only fall back to "completed" if the lead is still stuck in "calling",
-    // meaning no stream connected and no AI analysis ran.
+    // Check if voicemail — if answered by machine, mark no_response and retry
+    if (answeredBy && answeredBy.startsWith("machine")) {
+      logger.info({ leadId, answeredBy }, "Voicemail detected — scheduling retry");
+      const [lead] = await db
+        .select({ retryCount: leadsTable.retryCount, priority: leadsTable.priority })
+        .from(leadsTable)
+        .where(eq(leadsTable.id, leadId))
+        .limit(1);
+
+      const retries = parseInt(lead?.retryCount ?? "0");
+      const maxRetries = platformSettings.callRetries;
+
+      if (retries < maxRetries) {
+        await db
+          .update(leadsTable)
+          .set({ retryCount: String(retries + 1), status: "pending", updatedAt: new Date() })
+          .where(eq(leadsTable.id, leadId));
+
+        const delayMins = [
+          platformSettings.retryDelay1,
+          platformSettings.retryDelay2,
+          platformSettings.retryDelay3,
+        ][retries] ?? 120;
+
+        enqueueLead(leadId, delayMins * 60_000, lead?.priority ?? 2);
+        logger.info({ leadId, retryCount: retries + 1, delayMins }, "Voicemail — lead scheduled for retry");
+      } else {
+        dequeueLeadJobs(leadId);
+        await updateLeadStatus(leadId, "no_response");
+        logger.info({ leadId }, "Voicemail — max retries exhausted, marked no_response");
+      }
+      return updated;
+    }
+
     const [lead] = await db
       .select({ status: leadsTable.status })
       .from(leadsTable)
@@ -124,30 +157,35 @@ export async function handleCallStatusUpdate(
       .limit(1);
 
     if (lead?.status === "calling") {
-      // No stream/AI analysis ran — mark completed as a safe fallback
       await updateLeadStatus(leadId, "completed");
       logger.info({ leadId }, "Call completed with no stream analysis — lead marked completed");
     }
   } else if (status === "no-answer" || status === "busy") {
     const [lead] = await db
-      .select({ retryCount: leadsTable.retryCount })
+      .select({ retryCount: leadsTable.retryCount, priority: leadsTable.priority })
       .from(leadsTable)
       .where(eq(leadsTable.id, leadId))
       .limit(1);
 
     const retries = parseInt(lead?.retryCount ?? "0");
+    const maxRetries = platformSettings.callRetries;
 
-    if (retries < 3) {
+    if (retries < maxRetries) {
       await db
         .update(leadsTable)
         .set({ retryCount: String(retries + 1), status: "pending", updatedAt: new Date() })
         .where(eq(leadsTable.id, leadId));
 
-      const retryDelayMs = 2 * 60 * 60 * 1000; // 2 hours
-      enqueueLead(leadId, retryDelayMs);
-      logger.info({ leadId, retryCount: retries + 1 }, "Lead scheduled for retry");
+      const delayMins = [
+        platformSettings.retryDelay1,
+        platformSettings.retryDelay2,
+        platformSettings.retryDelay3,
+      ][retries] ?? 120;
+
+      enqueueLead(leadId, delayMins * 60_000, lead?.priority ?? 2);
+      logger.info({ leadId, retryCount: retries + 1, delayMins }, "Lead scheduled for retry");
     } else {
-      dequeueLeadJobs(leadId); // remove any stale queue jobs
+      dequeueLeadJobs(leadId);
       await updateLeadStatus(leadId, "no_response");
       logger.info({ leadId }, "Lead marked no_response — max retries exhausted");
     }
@@ -195,7 +233,6 @@ export async function updateCallTranscript(twilioCallSid: string, transcript: st
     .where(eq(callsTable.twilioCallSid, twilioCallSid));
 }
 
-/** Store AI-derived call outcome back onto the call record. */
 export async function updateCallOutcome(
   twilioCallSid: string,
   interest: string,
@@ -208,4 +245,12 @@ export async function updateCallOutcome(
       updatedAt: new Date(),
     })
     .where(eq(callsTable.twilioCallSid, twilioCallSid));
+}
+
+export async function getActiveCalls() {
+  return db
+    .select()
+    .from(callsTable)
+    .where(eq(callsTable.callStatus, "answered"))
+    .orderBy(desc(callsTable.createdAt));
 }

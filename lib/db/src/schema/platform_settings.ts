@@ -8,6 +8,11 @@ export interface StoredPlatformSettings {
   callRetries?: number;
   callHoursStart?: number;
   callHoursEnd?: number;
+  retryDelay1?: number;
+  retryDelay2?: number;
+  retryDelay3?: number;
+  webhookUrl?: string;
+  webhookSecret?: string;
 }
 
 export const platformSettingsTable = pgTable("platform_settings", {

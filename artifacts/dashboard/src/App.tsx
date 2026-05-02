@@ -14,6 +14,7 @@ import Dashboard from "@/pages/dashboard";
 import Leads from "@/pages/leads";
 import LeadDetail from "@/pages/lead-detail";
 import Calls from "@/pages/calls";
+import AgentSettings from "@/pages/agent";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -40,6 +41,7 @@ const ProtectedDashboard = () => <ProtectedRoute component={Dashboard} />;
 const ProtectedLeads = () => <ProtectedRoute component={Leads} />;
 const ProtectedLeadDetail = () => <ProtectedRoute component={LeadDetail} />;
 const ProtectedCalls = () => <ProtectedRoute component={Calls} />;
+const ProtectedAgentSettings = () => <ProtectedRoute component={AgentSettings} />;
 
 function Router() {
   return (
@@ -51,6 +53,7 @@ function Router() {
       <Route path="/leads" component={ProtectedLeads} />
       <Route path="/leads/:id" component={ProtectedLeadDetail} />
       <Route path="/calls" component={ProtectedCalls} />
+      <Route path="/agent" component={ProtectedAgentSettings} />
       <Route component={NotFound} />
     </Switch>
   );

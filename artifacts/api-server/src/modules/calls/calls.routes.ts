@@ -10,7 +10,6 @@ import {
   listCalls,
   getCall,
   listCallsForLead,
-  getAgentConfig,
 } from "./calls.controller.js";
 
 const router = Router();
@@ -22,9 +21,6 @@ router.post("/call-status", twilioValidate, callStatusWebhook);
 
 // Serve TTS audio blobs for Twilio <Play> — public, no auth (Twilio downloads these)
 router.get("/voice/audio/:id", serveAudio);
-
-// Agent config
-router.get("/agent-config", authMiddleware, getAgentConfig);
 
 // Authenticated call management
 router.post("/call/initiate/:leadId", authMiddleware, initiateCallManually);

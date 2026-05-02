@@ -335,8 +335,3 @@ export async function listCallsForLead(req: AuthRequest, res: Response): Promise
   }
 }
 
-// ── Agent Config endpoint ───────────────────────────────────────────────────
-
-export function getAgentConfig(req: AuthRequest, res: Response): void {
-  res.json({ config: agentConfig });
-}

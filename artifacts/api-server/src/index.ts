@@ -4,6 +4,7 @@ import { logger } from "./lib/logger.js";
 import { registerProcessor } from "./modules/queue/queue.service.js";
 import { triggerCallForLead } from "./modules/calls/calls.service.js";
 import { resetStuckCallingLeads } from "./modules/leads/leads.service.js";
+import { loadAgentConfig } from "./config/agent.config.js";
 
 const rawPort = process.env["PORT"];
 if (!rawPort) {
@@ -25,6 +26,13 @@ const httpServer = http.createServer(app);
 
 httpServer.listen(port, async () => {
   logger.info({ port }, "Server listening");
+
+  // Load persisted agent config from DB (falls back to env defaults if not set)
+  try {
+    await loadAgentConfig();
+  } catch (err) {
+    logger.error({ err }, "Failed to load agent config on startup");
+  }
 
   // On startup, reset any leads that got stuck in "calling" due to a crash
   try {

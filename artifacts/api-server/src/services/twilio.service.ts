@@ -48,7 +48,9 @@ export function generateInitialTwiML(
   language: string
 ): string {
   const audioUrl = `${config.baseUrl}/api/voice/audio/${audioId}`;
-  const gatherAction = `${config.baseUrl}/api/voice/gather?leadId=${leadId}&callSid=${encodeURIComponent(callSid)}&turn=0`;
+  const gatherAction = escapeUrl(
+    `${config.baseUrl}/api/voice/gather?leadId=${leadId}&callSid=${encodeURIComponent(callSid)}&turn=0`
+  );
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -72,7 +74,9 @@ export function generateGatherTwiML(
   language: string
 ): string {
   const audioUrl = `${config.baseUrl}/api/voice/audio/${audioId}`;
-  const gatherAction = `${config.baseUrl}/api/voice/gather?leadId=${leadId}&callSid=${encodeURIComponent(callSid)}&turn=${turn}`;
+  const gatherAction = escapeUrl(
+    `${config.baseUrl}/api/voice/gather?leadId=${leadId}&callSid=${encodeURIComponent(callSid)}&turn=${turn}`
+  );
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -118,7 +122,9 @@ export function generateSayTwiML(
 </Response>`;
   }
 
-  const gatherAction = `${config.baseUrl}/api/voice/gather?leadId=${leadId}&callSid=${encodeURIComponent(callSid ?? "")}&turn=${turn ?? 0}`;
+  const gatherAction = escapeUrl(
+    `${config.baseUrl}/api/voice/gather?leadId=${leadId}&callSid=${encodeURIComponent(callSid ?? "")}&turn=${turn ?? 0}`
+  );
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -131,6 +137,7 @@ export function generateSayTwiML(
 </Response>`;
 }
 
+/** Escape text content for XML. */
 function escapeXml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -138,6 +145,11 @@ function escapeXml(text: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+/** Escape a URL for use in an XML attribute (& → &amp;). */
+function escapeUrl(url: string): string {
+  return url.replace(/&/g, "&amp;");
 }
 
 /**

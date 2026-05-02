@@ -41,6 +41,7 @@ export async function generateSpeech(
         speaker: cfg.voice,
         model: TTS_MODEL,
         enable_preprocessing: true,
+        target_sample_rate_hz: 8000,  // 8kHz WAV — standard telephony, compatible with Twilio <Play>
       }),
     });
 

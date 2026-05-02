@@ -1,82 +1,202 @@
 import { logger } from "../lib/logger.js";
 import { config } from "../config/index.js";
+import type { AgentConfig } from "../config/agent.config.js";
+import type { ConversationMessage } from "./conversation-state.js";
 
-export const SARVAM_WS_URL = "wss://api.sarvam.ai/v1/realtime?model=sarvam-m";
+const STT_URL = "https://api.sarvam.ai/speech-to-text";
+const TTS_URL = "https://api.sarvam.ai/text-to-speech";
+const CHAT_URL = "https://api.sarvam.ai/v1/chat/completions";
+const CHAT_MODEL_CONVERSATION = "sarvam-105b";
+const CHAT_MODEL_ANALYSIS = "sarvam-105b";
+const TTS_MODEL = "bulbul:v3";
+const STT_MODEL = "saaras:v3";
 
-export type SarvamMessage =
-  | { type: "session.update"; session: Record<string, unknown> }
-  | { type: "input_audio_buffer.append"; audio: string }
-  | { type: "response.create" };
-
-const SYSTEM_PROMPT = `You are a professional sales agent calling on behalf of a CRM company. 
-Your goal is to:
-1. Introduce yourself and explain the product briefly
-2. Qualify the lead by asking about their current pain points with customer management
-3. Detect their level of interest (high / medium / low)
-4. If interested, propose scheduling a product demo
-5. Be polite, concise, and conversational
-6. If they are busy, offer to call back later
-Speak clearly and naturally. Keep responses short and focused.`;
-
-export function buildSarvamSessionConfig() {
-  return {
-    model: "sarvam-m",
-    instructions: SYSTEM_PROMPT,
-    voice: "meera",
-    input_audio_format: "mulaw",
-    output_audio_format: "mulaw",
-    input_audio_transcription: { model: "sarvam-m" },
-    turn_detection: {
-      type: "server_vad",
-      threshold: 0.5,
-      silence_duration_ms: 800,
-    },
-  };
+function sarvamHeaders(): Record<string, string> {
+  return { "api-subscription-key": config.sarvam.apiKey };
 }
 
-export async function analyzeTranscript(transcript: string): Promise<{
-  interest: "high" | "medium" | "low";
-  nextAction: "demo" | "follow_up" | "drop";
-  summary: string;
-}> {
-  const url = "https://api.sarvam.ai/v1/chat/completions";
-  const prompt = `You are a lead qualification analyst. Analyze the following sales call transcript and respond ONLY with valid JSON.
-
-Transcript:
-"""
-${transcript}
-"""
-
-Respond with exactly this JSON format:
-{
-  "interest": "high" | "medium" | "low",
-  "nextAction": "demo" | "follow_up" | "drop",
-  "summary": "one sentence summary of the call outcome"
-}`;
+/**
+ * Generate agent speech audio using Sarvam Bulbul v3 TTS.
+ * Returns a WAV audio Buffer, or null on failure.
+ */
+export async function generateSpeech(
+  text: string,
+  cfg: AgentConfig
+): Promise<Buffer | null> {
+  if (!config.sarvam.apiKey) {
+    logger.warn("SARVAM_API_KEY not set — skipping TTS");
+    return null;
+  }
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch(TTS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...sarvamHeaders(),
+      },
+      body: JSON.stringify({
+        inputs: [text],
+        target_language_code: cfg.language,
+        speaker: cfg.voice,
+        model: TTS_MODEL,
+        enable_preprocessing: true,
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      logger.error({ status: response.status, err }, "Sarvam TTS request failed");
+      return null;
+    }
+
+    const data = (await response.json()) as { audios?: string[] };
+    const audioBase64 = data.audios?.[0];
+    if (!audioBase64) {
+      logger.error({ data }, "Sarvam TTS returned no audio");
+      return null;
+    }
+
+    return Buffer.from(audioBase64, "base64");
+  } catch (err) {
+    logger.error({ err }, "Sarvam TTS exception");
+    return null;
+  }
+}
+
+/**
+ * Generate the agent's next conversational response using Sarvam Chat (sarvam-105b).
+ * Returns { text, shouldEnd } where shouldEnd is true if the agent sent [DONE].
+ */
+export async function generateConversationResponse(
+  messages: ConversationMessage[],
+  userInput: string
+): Promise<{ text: string; shouldEnd: boolean }> {
+  if (!config.sarvam.apiKey) {
+    return { text: "Thank you for your time. Goodbye!", shouldEnd: true };
+  }
+
+  const fullMessages = [
+    ...messages,
+    { role: "user" as const, content: userInput },
+  ];
+
+  try {
+    const response = await fetch(CHAT_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${config.sarvam.apiKey}`,
       },
       body: JSON.stringify({
-        model: "sarvam-m",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.1,
+        model: CHAT_MODEL_CONVERSATION,
+        messages: fullMessages,
+        temperature: 0.7,
+        max_tokens: 2000,
       }),
     });
 
     if (!response.ok) {
-      throw new Error(`Sarvam API error: ${response.status}`);
+      const err = await response.text();
+      logger.error({ status: response.status, err }, "Sarvam chat request failed");
+      return { text: "Thank you for your time. Goodbye!", shouldEnd: true };
     }
+
+    const data = (await response.json()) as {
+      choices: Array<{ message: { content: string } }>;
+    };
+
+    const raw = data.choices[0]?.message?.content?.trim() ?? "";
+    const shouldEnd = raw.startsWith("[DONE]");
+    const text = raw.replace(/^\[DONE\]\s*/i, "").trim();
+
+    return { text: text || "Thank you for your time. Goodbye!", shouldEnd };
+  } catch (err) {
+    logger.error({ err }, "Sarvam conversation response exception");
+    return { text: "Thank you for your time. Goodbye!", shouldEnd: true };
+  }
+}
+
+/**
+ * Transcribe a WAV/MP3 audio buffer using Sarvam Saaras v3 STT.
+ * Returns the transcript string or empty string on failure.
+ */
+export async function transcribeAudio(
+  audioBuffer: Buffer,
+  languageCode: string,
+  mimeType = "audio/wav"
+): Promise<string> {
+  if (!config.sarvam.apiKey) return "";
+
+  try {
+    const formData = new FormData();
+    const blob = new Blob([Uint8Array.from(audioBuffer)], { type: mimeType });
+    formData.append("file", blob, "audio.wav");
+    formData.append("model", STT_MODEL);
+    formData.append("language_code", languageCode);
+    formData.append("mode", "transcribe");
+
+    const response = await fetch(STT_URL, {
+      method: "POST",
+      headers: sarvamHeaders(),
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      logger.error({ status: response.status, err }, "Sarvam STT request failed");
+      return "";
+    }
+
+    const data = (await response.json()) as { transcript?: string };
+    return data.transcript ?? "";
+  } catch (err) {
+    logger.error({ err }, "Sarvam STT exception");
+    return "";
+  }
+}
+
+/**
+ * Analyse a completed call transcript and classify the lead.
+ */
+export async function analyzeTranscript(transcript: string): Promise<{
+  interest: "high" | "medium" | "low";
+  nextAction: "demo" | "follow_up" | "drop";
+  summary: string;
+}> {
+  const prompt = `You are a lead qualification analyst. Analyse this sales call transcript and respond ONLY with valid JSON.
+
+Transcript:
+"""
+${transcript}
+"""
+
+Respond with exactly this JSON (no markdown, no extra text):
+{"interest":"high"|"medium"|"low","nextAction":"demo"|"follow_up"|"drop","summary":"one sentence summary"}`;
+
+  try {
+    const response = await fetch(CHAT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.sarvam.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: CHAT_MODEL_ANALYSIS,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.1,
+        max_tokens: 2000,
+      }),
+    });
+
+    if (!response.ok) throw new Error(`Sarvam chat ${response.status}`);
 
     const data = (await response.json()) as {
       choices: Array<{ message: { content: string } }>;
     };
     const content = data.choices[0]?.message?.content ?? "{}";
     const parsed = JSON.parse(content.replace(/```json|```/g, "").trim());
+
     return {
       interest: parsed.interest ?? "low",
       nextAction: parsed.nextAction ?? "drop",

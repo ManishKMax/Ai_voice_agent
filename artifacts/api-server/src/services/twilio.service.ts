@@ -30,7 +30,6 @@ export async function initiateCall(toPhone: string, leadId: number): Promise<str
     url: voiceUrl,
     statusCallback: statusCallbackUrl,
     statusCallbackMethod: "POST",
-    // Include all terminal and intermediate statuses
     statusCallbackEvent: ["initiated", "ringing", "answered", "completed", "no-answer", "busy", "failed"],
   });
 
@@ -38,32 +37,118 @@ export async function initiateCall(toPhone: string, leadId: number): Promise<str
   return call.sid;
 }
 
-export function generateTwiML(leadId: number): string {
-  const wsUrl = config.baseUrl
-    .replace("https://", "wss://")
-    .replace("http://", "ws://");
+/**
+ * Initial TwiML — plays the agent's greeting then gathers speech.
+ * audioId: key into the in-memory audio cache.
+ */
+export function generateInitialTwiML(
+  leadId: number,
+  callSid: string,
+  audioId: string,
+  language: string
+): string {
+  const audioUrl = `${config.baseUrl}/api/voice/audio/${audioId}`;
+  const gatherAction = `${config.baseUrl}/api/voice/gather?leadId=${leadId}&callSid=${encodeURIComponent(callSid)}&turn=0`;
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Connect>
-    <Stream url="${wsUrl}/api/media-stream">
-      <Parameter name="leadId" value="${leadId}" />
-    </Stream>
-  </Connect>
+  <Gather input="speech" action="${gatherAction}" method="POST"
+          language="${language}" speechTimeout="3" timeout="10"
+          enhanced="true">
+    <Play>${audioUrl}</Play>
+  </Gather>
+  <Hangup/>
 </Response>`;
 }
 
 /**
+ * Mid-conversation TwiML — plays agent response then gathers next speech.
+ */
+export function generateGatherTwiML(
+  leadId: number,
+  callSid: string,
+  turn: number,
+  audioId: string,
+  language: string
+): string {
+  const audioUrl = `${config.baseUrl}/api/voice/audio/${audioId}`;
+  const gatherAction = `${config.baseUrl}/api/voice/gather?leadId=${leadId}&callSid=${encodeURIComponent(callSid)}&turn=${turn}`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Gather input="speech" action="${gatherAction}" method="POST"
+          language="${language}" speechTimeout="3" timeout="10"
+          enhanced="true">
+    <Play>${audioUrl}</Play>
+  </Gather>
+  <Hangup/>
+</Response>`;
+}
+
+/**
+ * End-of-call TwiML — plays farewell and hangs up.
+ */
+export function generateEndCallTwiML(audioId: string): string {
+  const audioUrl = `${config.baseUrl}/api/voice/audio/${audioId}`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Play>${audioUrl}</Play>
+  <Hangup/>
+</Response>`;
+}
+
+/**
+ * Fallback TwiML using Twilio <Say> when Sarvam TTS is unavailable.
+ */
+export function generateSayTwiML(
+  text: string,
+  language: string,
+  leadId?: number,
+  callSid?: string,
+  turn?: number,
+  isEnd = false
+): string {
+  const voice = language.startsWith("hi") ? "Polly.Aditi" : "Polly.Aditi";
+
+  if (isEnd || leadId === undefined) {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}" language="${language}">${escapeXml(text)}</Say>
+  <Hangup/>
+</Response>`;
+  }
+
+  const gatherAction = `${config.baseUrl}/api/voice/gather?leadId=${leadId}&callSid=${encodeURIComponent(callSid ?? "")}&turn=${turn ?? 0}`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Gather input="speech" action="${gatherAction}" method="POST"
+          language="${language}" speechTimeout="3" timeout="10"
+          enhanced="true">
+    <Say voice="${voice}" language="${language}">${escapeXml(text)}</Say>
+  </Gather>
+  <Hangup/>
+</Response>`;
+}
+
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+/**
  * Validate that an incoming request is genuinely from Twilio.
- * Returns true if valid, false if the signature check fails.
- * In dev (no auth token) this always returns true.
  */
 export function validateTwilioSignature(
   url: string,
   params: Record<string, string>,
   signature: string
 ): boolean {
-  if (!config.twilio.authToken) return true; // can't validate without token
+  if (!config.twilio.authToken) return true;
   try {
     return twilio.validateRequest(config.twilio.authToken, signature, url, params);
   } catch (err) {

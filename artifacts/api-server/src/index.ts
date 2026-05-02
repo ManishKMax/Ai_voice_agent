@@ -1,7 +1,6 @@
 import http from "http";
 import app from "./app.js";
 import { logger } from "./lib/logger.js";
-import { attachMediaStreamServer } from "./websocket/media-stream.js";
 import { registerProcessor } from "./modules/queue/queue.service.js";
 import { triggerCallForLead } from "./modules/calls/calls.service.js";
 import { resetStuckCallingLeads } from "./modules/leads/leads.service.js";
@@ -23,7 +22,6 @@ registerProcessor(async (leadId: number) => {
 });
 
 const httpServer = http.createServer(app);
-attachMediaStreamServer(httpServer);
 
 httpServer.listen(port, async () => {
   logger.info({ port }, "Server listening");

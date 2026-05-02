@@ -194,3 +194,18 @@ export async function updateCallTranscript(twilioCallSid: string, transcript: st
     .set({ transcript, updatedAt: new Date() })
     .where(eq(callsTable.twilioCallSid, twilioCallSid));
 }
+
+/** Store AI-derived call outcome back onto the call record. */
+export async function updateCallOutcome(
+  twilioCallSid: string,
+  interest: string,
+  summary: string
+) {
+  await db
+    .update(callsTable)
+    .set({
+      transcript: summary,
+      updatedAt: new Date(),
+    })
+    .where(eq(callsTable.twilioCallSid, twilioCallSid));
+}

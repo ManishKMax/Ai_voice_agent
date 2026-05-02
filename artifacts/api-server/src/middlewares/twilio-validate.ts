@@ -5,10 +5,10 @@ import { logger } from "../lib/logger.js";
 
 /**
  * Validates incoming requests are genuinely from Twilio.
- * In development (no auth token configured), validation is skipped.
+ * In development (no auth token configured or NODE_ENV=development), validation is skipped.
  */
 export function twilioValidate(req: Request, res: Response, next: NextFunction): void {
-  if (!config.twilio.authToken) {
+  if (!config.twilio.authToken || process.env.NODE_ENV === "development") {
     next();
     return;
   }

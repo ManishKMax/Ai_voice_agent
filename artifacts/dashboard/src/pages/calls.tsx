@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useGetCalls, useAnalyzeCall, useGetCallById } from "@workspace/api-client-react";
+import { useGetCalls, useAnalyzeCall, useGetCallById, getGetCallByIdQueryKey } from "@workspace/api-client-react";
 import { format } from "date-fns";
 import { Link } from "wouter";
 import { Search, Filter, PlayCircle, ExternalLink, Activity, FileText } from "lucide-react";
@@ -34,7 +34,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 
 function CallDetailDialog({ callId, open, onOpenChange }: { callId: number | null, open: boolean, onOpenChange: (open: boolean) => void }) {
-  const { data, isLoading } = useGetCallById(callId || 0, { query: { enabled: !!callId && open } });
+  const { data, isLoading } = useGetCallById(callId || 0, { query: { queryKey: getGetCallByIdQueryKey(callId || 0), enabled: !!callId && open } });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

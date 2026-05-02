@@ -1,4 +1,4 @@
-import { eq, desc, ilike, or } from "drizzle-orm";
+import { eq, desc, ilike, or, and } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { leadsTable, type InsertLead, type LeadStatus } from "@workspace/db/schema";
 import { enqueueLead } from "../queue/queue.service.js";
@@ -26,31 +26,39 @@ export async function getLeads(filters?: {
   limit?: number;
   offset?: number;
 }) {
-  const query = db
+  // Build where clause before chaining — Drizzle query builder is immutable
+  const whereClause = filters?.status
+    ? eq(leadsTable.status, filters.status)
+    : filters?.search
+      ? or(
+          ilike(leadsTable.name, `%${filters.search}%`),
+          ilike(leadsTable.phone, `%${filters.search}%`)
+        )
+      : undefined;
+
+  const base = db
     .select()
     .from(leadsTable)
     .orderBy(desc(leadsTable.createdAt))
     .limit(filters?.limit ?? 50)
     .offset(filters?.offset ?? 0);
 
-  if (filters?.status) {
-    query.where(eq(leadsTable.status, filters.status));
-  } else if (filters?.search) {
-    query.where(
-      or(
-        ilike(leadsTable.name, `%${filters.search}%`),
-        ilike(leadsTable.phone, `%${filters.search}%`)
-      )
-    );
-  }
-
-  return query;
+  return whereClause ? base.where(whereClause) : base;
 }
 
 export async function updateLeadStatus(leadId: number, status: LeadStatus, notes?: string) {
+  // Only include notes in the update set if explicitly provided
+  const updateData: { status: LeadStatus; updatedAt: Date; notes?: string } = {
+    status,
+    updatedAt: new Date(),
+  };
+  if (notes !== undefined) {
+    updateData.notes = notes;
+  }
+
   const [updated] = await db
     .update(leadsTable)
-    .set({ status, notes, updatedAt: new Date() })
+    .set(updateData)
     .where(eq(leadsTable.id, leadId))
     .returning();
   return updated;
@@ -71,4 +79,23 @@ export async function exportLeadsCSV(): Promise<string> {
     )
     .join("\n");
   return header + rows;
+}
+
+/**
+ * On server startup, reset any leads stuck in "calling" back to "pending"
+ * so they get re-queued. This handles crashes mid-call-initiation.
+ */
+export async function resetStuckCallingLeads() {
+  const stuck = await db
+    .update(leadsTable)
+    .set({ status: "pending", updatedAt: new Date() })
+    .where(eq(leadsTable.status, "calling"))
+    .returning({ id: leadsTable.id });
+
+  if (stuck.length > 0) {
+    logger.warn({ count: stuck.length, ids: stuck.map((l) => l.id) }, "Reset stuck calling leads");
+    for (const lead of stuck) {
+      enqueueLead(lead.id);
+    }
+  }
 }

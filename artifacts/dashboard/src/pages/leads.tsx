@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useGetLeads, useCreateLead, useExportLeads, getGetLeadsQueryKey } from "@workspace/api-client-react";
+import { useGetLeads, useCreateLead, useExportLeads, getGetLeadsQueryKey, getExportLeadsQueryKey } from "@workspace/api-client-react";
 import { Link } from "wouter";
 import { format } from "date-fns";
 import { Plus, Search, Filter, Download, Upload, Phone, Eye } from "lucide-react";
@@ -68,7 +68,7 @@ export default function Leads() {
   });
 
   const createLeadMutation = useCreateLead();
-  const { refetch: refetchExport, isFetching: isExporting } = useExportLeads({ query: { enabled: false } });
+  const { refetch: refetchExport, isFetching: isExporting } = useExportLeads({ query: { queryKey: getExportLeadsQueryKey(), enabled: false } });
 
   const form = useForm<z.infer<typeof createLeadSchema>>({
     resolver: zodResolver(createLeadSchema),

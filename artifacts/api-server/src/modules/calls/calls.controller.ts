@@ -10,43 +10,64 @@ import {
 import { logger } from "../../lib/logger.js";
 
 export async function voiceWebhook(req: Request, res: Response): Promise<void> {
-  const leadId = parseInt(req.query.leadId as string ?? "0");
-  logger.info({ leadId }, "Twilio voice webhook received");
-  const twiml = generateTwiML(leadId);
-  res.setHeader("Content-Type", "text/xml");
-  res.send(twiml);
+  const leadId = parseInt((req.query.leadId as string) ?? "0");
+  logger.info({ leadId, callSid: req.body?.CallSid }, "Twilio voice webhook");
+
+  // Always respond with TwiML — never leave Twilio hanging
+  try {
+    const twiml = generateTwiML(leadId);
+    res.setHeader("Content-Type", "text/xml");
+    res.send(twiml);
+  } catch (err) {
+    logger.error({ err, leadId }, "Failed to generate TwiML");
+    // Return a safe fallback that ends the call gracefully
+    res.setHeader("Content-Type", "text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
+  }
 }
 
 export async function callStatusWebhook(req: Request, res: Response): Promise<void> {
-  try {
-    const leadId = parseInt(req.query.leadId as string ?? "0");
-    const {
-      CallSid: callSid,
-      CallStatus: callStatus,
-      CallDuration: duration,
-      RecordingUrl: recordingUrl,
-    } = req.body;
+  const leadId = parseInt((req.query.leadId as string) ?? "0");
 
-    logger.info({ callSid, callStatus, leadId }, "Call status webhook");
-    await handleCallStatusUpdate(
-      callSid,
-      callStatus,
-      leadId,
-      duration ? parseInt(duration) : undefined,
-      recordingUrl
-    );
-    res.status(204).send();
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Failed to handle call status";
-    res.status(500).json({ error: msg });
+  const {
+    CallSid: callSid,
+    CallStatus: callStatus,
+    CallDuration: duration,
+    RecordingUrl: recordingUrl,
+  } = req.body as Record<string, string>;
+
+  logger.info({ callSid, callStatus, leadId, duration }, "Twilio call status webhook");
+
+  if (!callSid || !callStatus) {
+    logger.warn({ body: req.body }, "Call status webhook missing required fields");
+    res.status(400).send("Missing CallSid or CallStatus");
+    return;
   }
+
+  // Respond immediately — Twilio does not wait for processing
+  res.status(204).send();
+
+  // Process asynchronously so we never block Twilio's retry logic
+  setImmediate(async () => {
+    try {
+      await handleCallStatusUpdate(
+        callSid,
+        callStatus,
+        leadId,
+        duration ? parseInt(duration) : undefined,
+        recordingUrl
+      );
+    } catch (err) {
+      logger.error({ err, callSid, callStatus, leadId }, "Error processing call status webhook");
+    }
+  });
 }
 
 export async function initiateCallManually(req: AuthRequest, res: Response): Promise<void> {
   try {
     const leadId = parseInt(req.params.leadId as string);
-    if (!leadId) {
-      res.status(400).json({ error: "leadId is required" });
+    if (!leadId || isNaN(leadId)) {
+      res.status(400).json({ error: "Valid leadId is required" });
       return;
     }
     await triggerCallForLead(leadId);

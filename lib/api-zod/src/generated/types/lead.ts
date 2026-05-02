@@ -12,9 +12,16 @@ export interface Lead {
   name: string;
   phone: string;
   source?: string | null;
+  sourceId?: string | null;
   status: LeadStatus;
   retryCount: string;
   notes?: string | null;
+  /** Comma-separated tags e.g. "hot,callback" */
+  tags: string;
+  /** 1=low 2=normal 3=high 4=urgent */
+  priority: number;
+  /** Do Not Call flag */
+  dnc: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

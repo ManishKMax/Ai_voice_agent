@@ -18,9 +18,12 @@ import type {
 
 import type {
   AnalyzeCallResponse,
+  BulkLeadRequest,
+  BulkLeadResponse,
   CallsListResponse,
   CreateLeadRequest,
   DashboardStats,
+  DeleteLeadResponse,
   ErrorResponse,
   GetCallsParams,
   GetLeadsParams,
@@ -36,6 +39,7 @@ import type {
   RetryLeadResponse,
   SingleCallResponse,
   SingleLeadResponse,
+  UpdateLeadRequest,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -548,6 +552,92 @@ export function useExportLeads<
 }
 
 /**
+ * @summary Bulk action on leads (delete, requeue, set_status, set_dnc)
+ */
+export const getBulkLeadActionUrl = () => {
+  return `/api/leads/bulk`;
+};
+
+export const bulkLeadAction = async (
+  bulkLeadRequest: BulkLeadRequest,
+  options?: RequestInit,
+): Promise<BulkLeadResponse> => {
+  return customFetch<BulkLeadResponse>(getBulkLeadActionUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(bulkLeadRequest),
+  });
+};
+
+export const getBulkLeadActionMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof bulkLeadAction>>,
+    TError,
+    { data: BodyType<BulkLeadRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof bulkLeadAction>>,
+  TError,
+  { data: BodyType<BulkLeadRequest> },
+  TContext
+> => {
+  const mutationKey = ["bulkLeadAction"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof bulkLeadAction>>,
+    { data: BodyType<BulkLeadRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return bulkLeadAction(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type BulkLeadActionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof bulkLeadAction>>
+>;
+export type BulkLeadActionMutationBody = BodyType<BulkLeadRequest>;
+export type BulkLeadActionMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Bulk action on leads (delete, requeue, set_status, set_dnc)
+ */
+export const useBulkLeadAction = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof bulkLeadAction>>,
+    TError,
+    { data: BodyType<BulkLeadRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof bulkLeadAction>>,
+  TError,
+  { data: BodyType<BulkLeadRequest> },
+  TContext
+> => {
+  return useMutation(getBulkLeadActionMutationOptions(options));
+};
+
+/**
  * @summary Get lead by ID
  */
 export const getGetLeadByIdUrl = (id: number) => {
@@ -633,6 +723,177 @@ export function useGetLeadById<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Update a lead
+ */
+export const getUpdateLeadUrl = (id: number) => {
+  return `/api/leads/${id}`;
+};
+
+export const updateLead = async (
+  id: number,
+  updateLeadRequest: UpdateLeadRequest,
+  options?: RequestInit,
+): Promise<SingleLeadResponse> => {
+  return customFetch<SingleLeadResponse>(getUpdateLeadUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updateLeadRequest),
+  });
+};
+
+export const getUpdateLeadMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateLead>>,
+    TError,
+    { id: number; data: BodyType<UpdateLeadRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateLead>>,
+  TError,
+  { id: number; data: BodyType<UpdateLeadRequest> },
+  TContext
+> => {
+  const mutationKey = ["updateLead"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateLead>>,
+    { id: number; data: BodyType<UpdateLeadRequest> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updateLead(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateLeadMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateLead>>
+>;
+export type UpdateLeadMutationBody = BodyType<UpdateLeadRequest>;
+export type UpdateLeadMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Update a lead
+ */
+export const useUpdateLead = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateLead>>,
+    TError,
+    { id: number; data: BodyType<UpdateLeadRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateLead>>,
+  TError,
+  { id: number; data: BodyType<UpdateLeadRequest> },
+  TContext
+> => {
+  return useMutation(getUpdateLeadMutationOptions(options));
+};
+
+/**
+ * @summary Delete a lead and its call history
+ */
+export const getDeleteLeadUrl = (id: number) => {
+  return `/api/leads/${id}`;
+};
+
+export const deleteLead = async (
+  id: number,
+  options?: RequestInit,
+): Promise<DeleteLeadResponse> => {
+  return customFetch<DeleteLeadResponse>(getDeleteLeadUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteLeadMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteLead>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteLead>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["deleteLead"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteLead>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deleteLead(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteLeadMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteLead>>
+>;
+
+export type DeleteLeadMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Delete a lead and its call history
+ */
+export const useDeleteLead = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteLead>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteLead>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getDeleteLeadMutationOptions(options));
+};
 
 /**
  * @summary Get call history for a specific lead

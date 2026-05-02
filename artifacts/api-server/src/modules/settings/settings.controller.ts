@@ -49,7 +49,8 @@ export async function testTwilio(req: Request, res: Response, next: NextFunction
     const token = (req.body.twilioAuthToken   as string | undefined) || platformSettings.twilioAuthToken;
 
     if (!sid || !token) {
-      return res.status(400).json({ success: false, message: "Twilio Account SID and Auth Token are required" });
+      res.status(400).json({ success: false, message: "Twilio Account SID and Auth Token are required" });
+      return;
     }
 
     const client = twilio(sid, token);
@@ -72,7 +73,8 @@ export async function testSarvam(req: Request, res: Response, next: NextFunction
     const apiKey = (req.body.sarvamApiKey as string | undefined) || platformSettings.sarvamApiKey;
 
     if (!apiKey) {
-      return res.status(400).json({ success: false, message: "Sarvam API Key is required" });
+      res.status(400).json({ success: false, message: "Sarvam API Key is required" });
+      return;
     }
 
     const response = await fetch("https://api.sarvam.ai/text-to-speech", {
@@ -91,7 +93,8 @@ export async function testSarvam(req: Request, res: Response, next: NextFunction
 
     if (!response.ok) {
       const body = await response.text();
-      return res.status(400).json({ success: false, message: `Sarvam API error (${response.status}): ${body.slice(0, 200)}` });
+      res.status(400).json({ success: false, message: `Sarvam API error (${response.status}): ${body.slice(0, 200)}` });
+      return;
     }
 
     res.json({ success: true, message: "Sarvam AI connected successfully" });
@@ -107,7 +110,8 @@ export async function getTwilioNumbers(req: Request, res: Response, next: NextFu
     const token = platformSettings.twilioAuthToken;
 
     if (!sid || !token) {
-      return res.status(400).json({ success: false, message: "Twilio credentials not configured" });
+      res.status(400).json({ success: false, message: "Twilio credentials not configured" });
+      return;
     }
 
     const client = twilio(sid, token);

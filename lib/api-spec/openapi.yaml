@@ -161,6 +161,33 @@ paths:
               schema:
                 type: string
 
+  /leads/bulk:
+    post:
+      operationId: bulkLeadAction
+      tags: [leads]
+      summary: Bulk action on leads (delete, requeue, set_status, set_dnc)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkLeadRequest"
+      responses:
+        "200":
+          description: Bulk action result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkLeadResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /leads/{id}:
     get:
       operationId: getLeadById
@@ -181,6 +208,62 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SingleLeadResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: updateLead
+      tags: [leads]
+      summary: Update a lead
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateLeadRequest"
+      responses:
+        "200":
+          description: Lead updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SingleLeadResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deleteLead
+      tags: [leads]
+      summary: Delete a lead and its call history
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Lead deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteLeadResponse"
         "404":
           description: Not found
           content:
@@ -470,6 +553,8 @@ components:
         - interested
         - not_interested
         - no_response
+        - callback
+        - dnc
 
     Lead:
       type: object
@@ -483,6 +568,9 @@ components:
         source:
           type: string
           nullable: true
+        sourceId:
+          type: string
+          nullable: true
         status:
           $ref: "#/components/schemas/LeadStatus"
         retryCount:
@@ -490,13 +578,22 @@ components:
         notes:
           type: string
           nullable: true
+        tags:
+          type: string
+          description: Comma-separated tags e.g. "hot,callback"
+        priority:
+          type: integer
+          description: "1=low 2=normal 3=high 4=urgent"
+        dnc:
+          type: boolean
+          description: Do Not Call flag
         createdAt:
           type: string
           format: date-time
         updatedAt:
           type: string
           format: date-time
-      required: [id, name, phone, status, retryCount, createdAt, updatedAt]
+      required: [id, name, phone, status, retryCount, tags, priority, dnc, createdAt, updatedAt]
 
     CreateLeadRequest:
       type: object
@@ -508,9 +605,67 @@ components:
           description: E.164 format required (e.g. +919876543210)
         source:
           type: string
+        sourceId:
+          type: string
         notes:
           type: string
       required: [name, phone]
+
+    UpdateLeadRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        phone:
+          type: string
+        source:
+          type: string
+        sourceId:
+          type: string
+        notes:
+          type: string
+        tags:
+          type: string
+        priority:
+          type: integer
+        status:
+          $ref: "#/components/schemas/LeadStatus"
+        dnc:
+          type: boolean
+
+    BulkLeadRequest:
+      type: object
+      properties:
+        ids:
+          type: array
+          items:
+            type: integer
+        action:
+          type: string
+          enum: [delete, requeue, set_status, set_dnc]
+        status:
+          $ref: "#/components/schemas/LeadStatus"
+        dnc:
+          type: boolean
+      required: [ids, action]
+
+    BulkLeadResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        count:
+          type: integer
+      required: [message, count]
+
+    DeleteLeadResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        id:
+          type: integer
+      required: [message, id]
 
     LeadResponse:
       type: object

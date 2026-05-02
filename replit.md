@@ -38,8 +38,14 @@ A production-ready AI-powered outbound call system that accepts leads, calls the
 ## Database Schema
 
 - `users` — registered users (JWT auth)
-- `leads` — lead records with status lifecycle (pending → calling → completed → interested/not_interested)
+- `leads` — lead records with full Phase 1 fields:
+  - status: pending | calling | completed | interested | not_interested | no_response | callback | dnc
+  - `tags` TEXT — comma-separated tags (hot, warm, cold, vip, callback, etc.)
+  - `priority` INTEGER — 1=low, 2=normal, 3=high, 4=urgent (default 2)
+  - `source_id` TEXT — CRM cross-reference ID
+  - `dnc` BOOLEAN — Do Not Call flag (default false)
 - `calls` — call log with Twilio SID, status, duration, transcript, recording URL
+- `platform_settings` — runtime credentials (Twilio SID/token, Sarvam API key, call behavior)
 
 ## Agent Configuration
 
@@ -101,9 +107,12 @@ Call ends → transcript saved → Sarvam AI analysis runs
 ### Leads
 - `POST /api/leads` — create lead (auto-enqueues for calling)
 - `POST /api/leads/upload` — CSV upload (bulk import)
+- `POST /api/leads/bulk` — bulk action: delete | requeue | set_status | set_dnc
 - `GET /api/leads` — list leads (filter by status, search, paginate)
-- `GET /api/leads/export` — export as CSV
+- `GET /api/leads/export` — export as CSV (includes tags, priority, dnc, source_id)
 - `GET /api/leads/:id` — single lead
+- `PATCH /api/leads/:id` — update name, phone, source, notes, tags, priority, status, dnc
+- `DELETE /api/leads/:id` — delete lead + all call history
 
 ### Calls
 - `POST /api/call/initiate/:leadId` — manually trigger a call

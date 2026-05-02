@@ -5,12 +5,16 @@
  * AI Lead Calling & Qualification System API
  * OpenAPI spec version: 0.1.0
  */
+import type { LeadStatus } from "./leadStatus";
 
-export interface CreateLeadRequest {
-  name: string;
-  /** E.164 format required (e.g. +919876543210) */
-  phone: string;
+export interface UpdateLeadRequest {
+  name?: string;
+  phone?: string;
   source?: string;
   sourceId?: string;
   notes?: string;
+  tags?: string;
+  priority?: number;
+  status?: LeadStatus;
+  dnc?: boolean;
 }

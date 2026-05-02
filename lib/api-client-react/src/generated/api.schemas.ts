@@ -50,6 +50,8 @@ export const LeadStatus = {
   interested: "interested",
   not_interested: "not_interested",
   no_response: "no_response",
+  callback: "callback",
+  dnc: "dnc",
 } as const;
 
 export interface Lead {
@@ -57,9 +59,16 @@ export interface Lead {
   name: string;
   phone: string;
   source?: string | null;
+  sourceId?: string | null;
   status: LeadStatus;
   retryCount: string;
   notes?: string | null;
+  /** Comma-separated tags e.g. "hot,callback" */
+  tags: string;
+  /** 1=low 2=normal 3=high 4=urgent */
+  priority: number;
+  /** Do Not Call flag */
+  dnc: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -69,7 +78,47 @@ export interface CreateLeadRequest {
   /** E.164 format required (e.g. +919876543210) */
   phone: string;
   source?: string;
+  sourceId?: string;
   notes?: string;
+}
+
+export interface UpdateLeadRequest {
+  name?: string;
+  phone?: string;
+  source?: string;
+  sourceId?: string;
+  notes?: string;
+  tags?: string;
+  priority?: number;
+  status?: LeadStatus;
+  dnc?: boolean;
+}
+
+export type BulkLeadRequestAction =
+  (typeof BulkLeadRequestAction)[keyof typeof BulkLeadRequestAction];
+
+export const BulkLeadRequestAction = {
+  delete: "delete",
+  requeue: "requeue",
+  set_status: "set_status",
+  set_dnc: "set_dnc",
+} as const;
+
+export interface BulkLeadRequest {
+  ids: number[];
+  action: BulkLeadRequestAction;
+  status?: LeadStatus;
+  dnc?: boolean;
+}
+
+export interface BulkLeadResponse {
+  message: string;
+  count: number;
+}
+
+export interface DeleteLeadResponse {
+  message: string;
+  id: number;
 }
 
 export interface LeadResponse {

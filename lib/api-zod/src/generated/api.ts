@@ -49,6 +49,7 @@ export const CreateLeadBody = zod.object({
   name: zod.string(),
   phone: zod.string().describe("E.164 format required (e.g. +919876543210)"),
   source: zod.string().optional(),
+  sourceId: zod.string().optional(),
   notes: zod.string().optional(),
 });
 
@@ -67,6 +68,8 @@ export const GetLeadsQueryParams = zod.object({
       "interested",
       "not_interested",
       "no_response",
+      "callback",
+      "dnc",
     ])
     .optional(),
   search: zod.coerce.string().optional(),
@@ -81,6 +84,7 @@ export const GetLeadsResponse = zod.object({
       name: zod.string(),
       phone: zod.string(),
       source: zod.string().nullish(),
+      sourceId: zod.string().nullish(),
       status: zod.enum([
         "pending",
         "calling",
@@ -88,13 +92,44 @@ export const GetLeadsResponse = zod.object({
         "interested",
         "not_interested",
         "no_response",
+        "callback",
+        "dnc",
       ]),
       retryCount: zod.string(),
       notes: zod.string().nullish(),
+      tags: zod.string().describe('Comma-separated tags e.g. \"hot,callback\"'),
+      priority: zod.number().describe("1=low 2=normal 3=high 4=urgent"),
+      dnc: zod.boolean().describe("Do Not Call flag"),
       createdAt: zod.coerce.date(),
       updatedAt: zod.coerce.date(),
     }),
   ),
+  count: zod.number(),
+});
+
+/**
+ * @summary Bulk action on leads (delete, requeue, set_status, set_dnc)
+ */
+export const BulkLeadActionBody = zod.object({
+  ids: zod.array(zod.number()),
+  action: zod.enum(["delete", "requeue", "set_status", "set_dnc"]),
+  status: zod
+    .enum([
+      "pending",
+      "calling",
+      "completed",
+      "interested",
+      "not_interested",
+      "no_response",
+      "callback",
+      "dnc",
+    ])
+    .optional(),
+  dnc: zod.boolean().optional(),
+});
+
+export const BulkLeadActionResponse = zod.object({
+  message: zod.string(),
   count: zod.number(),
 });
 
@@ -111,6 +146,7 @@ export const GetLeadByIdResponse = zod.object({
     name: zod.string(),
     phone: zod.string(),
     source: zod.string().nullish(),
+    sourceId: zod.string().nullish(),
     status: zod.enum([
       "pending",
       "calling",
@@ -118,12 +154,86 @@ export const GetLeadByIdResponse = zod.object({
       "interested",
       "not_interested",
       "no_response",
+      "callback",
+      "dnc",
     ]),
     retryCount: zod.string(),
     notes: zod.string().nullish(),
+    tags: zod.string().describe('Comma-separated tags e.g. \"hot,callback\"'),
+    priority: zod.number().describe("1=low 2=normal 3=high 4=urgent"),
+    dnc: zod.boolean().describe("Do Not Call flag"),
     createdAt: zod.coerce.date(),
     updatedAt: zod.coerce.date(),
   }),
+});
+
+/**
+ * @summary Update a lead
+ */
+export const UpdateLeadParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const UpdateLeadBody = zod.object({
+  name: zod.string().optional(),
+  phone: zod.string().optional(),
+  source: zod.string().optional(),
+  sourceId: zod.string().optional(),
+  notes: zod.string().optional(),
+  tags: zod.string().optional(),
+  priority: zod.number().optional(),
+  status: zod
+    .enum([
+      "pending",
+      "calling",
+      "completed",
+      "interested",
+      "not_interested",
+      "no_response",
+      "callback",
+      "dnc",
+    ])
+    .optional(),
+  dnc: zod.boolean().optional(),
+});
+
+export const UpdateLeadResponse = zod.object({
+  lead: zod.object({
+    id: zod.number(),
+    name: zod.string(),
+    phone: zod.string(),
+    source: zod.string().nullish(),
+    sourceId: zod.string().nullish(),
+    status: zod.enum([
+      "pending",
+      "calling",
+      "completed",
+      "interested",
+      "not_interested",
+      "no_response",
+      "callback",
+      "dnc",
+    ]),
+    retryCount: zod.string(),
+    notes: zod.string().nullish(),
+    tags: zod.string().describe('Comma-separated tags e.g. \"hot,callback\"'),
+    priority: zod.number().describe("1=low 2=normal 3=high 4=urgent"),
+    dnc: zod.boolean().describe("Do Not Call flag"),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+  }),
+});
+
+/**
+ * @summary Delete a lead and its call history
+ */
+export const DeleteLeadParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const DeleteLeadResponse = zod.object({
+  message: zod.string(),
+  id: zod.number(),
 });
 
 /**
@@ -291,6 +401,7 @@ export const GetDashboardStatsResponse = zod.object({
         name: zod.string(),
         phone: zod.string(),
         source: zod.string().nullish(),
+        sourceId: zod.string().nullish(),
         status: zod.enum([
           "pending",
           "calling",
@@ -298,9 +409,16 @@ export const GetDashboardStatsResponse = zod.object({
           "interested",
           "not_interested",
           "no_response",
+          "callback",
+          "dnc",
         ]),
         retryCount: zod.string(),
         notes: zod.string().nullish(),
+        tags: zod
+          .string()
+          .describe('Comma-separated tags e.g. \"hot,callback\"'),
+        priority: zod.number().describe("1=low 2=normal 3=high 4=urgent"),
+        dnc: zod.boolean().describe("Do Not Call flag"),
         createdAt: zod.coerce.date(),
         updatedAt: zod.coerce.date(),
       }),

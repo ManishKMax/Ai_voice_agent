@@ -7,6 +7,9 @@
  */
 
 export * from "./analyzeCallResponse";
+export * from "./bulkLeadRequest";
+export * from "./bulkLeadRequestAction";
+export * from "./bulkLeadResponse";
 export * from "./call";
 export * from "./callsListResponse";
 export * from "./callStatus";
@@ -17,6 +20,7 @@ export * from "./dashboardStatsCallsByStatus";
 export * from "./dashboardStatsLeads";
 export * from "./dashboardStatsLeadsByStatus";
 export * from "./dashboardStatsQueue";
+export * from "./deleteLeadResponse";
 export * from "./errorResponse";
 export * from "./getCallsParams";
 export * from "./getLeadsParams";
@@ -37,4 +41,5 @@ export * from "./registerResponse";
 export * from "./retryLeadResponse";
 export * from "./singleCallResponse";
 export * from "./singleLeadResponse";
+export * from "./updateLeadRequest";
 export * from "./userPublic";

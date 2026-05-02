@@ -30,19 +30,13 @@ interface Turn { speaker: "Agent" | "Lead"; text: string; }
 
 function parseTranscript(raw: string | null | undefined): Turn[] {
   if (!raw) return [];
-  return raw
-    .split("\n")
-    .map(line => line.trim())
-    .filter(Boolean)
-    .flatMap(line => {
-      if (line.startsWith("Agent:")) {
-        return [{ speaker: "Agent" as const, text: line.slice(6).trim() }];
-      }
-      if (line.startsWith("Lead:")) {
-        return [{ speaker: "Lead" as const, text: line.slice(5).trim() }];
-      }
-      return [];
-    });
+  const turns: Turn[] = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("Agent:")) turns.push({ speaker: "Agent", text: trimmed.slice(6).trim() });
+    else if (trimmed.startsWith("Lead:")) turns.push({ speaker: "Lead", text: trimmed.slice(5).trim() });
+  }
+  return turns;
 }
 
 // ── Chat bubble ──────────────────────────────────────────────────────────────

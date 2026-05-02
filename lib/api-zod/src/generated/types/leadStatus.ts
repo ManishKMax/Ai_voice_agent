@@ -15,4 +15,6 @@ export const LeadStatus = {
   interested: "interested",
   not_interested: "not_interested",
   no_response: "no_response",
+  callback: "callback",
+  dnc: "dnc",
 } as const;

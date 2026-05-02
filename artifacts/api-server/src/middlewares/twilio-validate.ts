@@ -5,29 +5,32 @@ import { logger } from "../lib/logger.js";
 
 /**
  * Validates incoming requests are genuinely from Twilio.
- * In development (no public URL / no auth token), validation is skipped.
+ * In development (no auth token configured), validation is skipped.
  */
 export function twilioValidate(req: Request, res: Response, next: NextFunction): void {
-  // Skip validation if Twilio credentials aren't configured yet
   if (!config.twilio.authToken) {
     next();
     return;
   }
 
-  const signature = req.headers["x-twilio-signature"] as string ?? "";
+  const signature = (req.headers["x-twilio-signature"] as string) ?? "";
 
-  // Reconstruct the full URL Twilio used to POST to this endpoint
-  const protocol = req.headers["x-forwarded-proto"] ?? req.protocol;
-  const host = req.headers["x-forwarded-host"] ?? req.headers.host;
-  const fullUrl = `${protocol}://${host}${req.originalUrl}`;
+  // Normalize headers that may come as string | string[]
+  const proto = Array.isArray(req.headers["x-forwarded-proto"])
+    ? req.headers["x-forwarded-proto"][0]
+    : (req.headers["x-forwarded-proto"] ?? req.protocol);
 
-  // Twilio signature validation uses POST body params
+  const host = Array.isArray(req.headers["x-forwarded-host"])
+    ? req.headers["x-forwarded-host"][0]
+    : (req.headers["x-forwarded-host"] ?? req.headers.host ?? "");
+
+  const fullUrl = `${proto}://${host}${req.originalUrl}`;
   const params = req.body as Record<string, string>;
 
   const valid = validateTwilioSignature(fullUrl, params, signature);
 
   if (!valid) {
-    logger.warn({ url: fullUrl, signature: signature.slice(0, 10) }, "Invalid Twilio signature — rejecting request");
+    logger.warn({ url: fullUrl }, "Invalid Twilio signature — rejecting request");
     res.status(403).send("Forbidden: invalid Twilio signature");
     return;
   }

@@ -1,6 +1,6 @@
-import React, { useEffect } from "react";
-import { useGetLeadById, useGetCalls, useInitiateCall, getGetCallsQueryKey, getGetLeadByIdQueryKey } from "@workspace/api-client-react";
-import { useParams, Link, useLocation } from "wouter";
+import React from "react";
+import { useGetLeadById, useGetCallsForLead, useInitiateCall, getGetCallsForLeadQueryKey, getGetLeadByIdQueryKey } from "@workspace/api-client-react";
+import { useParams, Link } from "wouter";
 import { format } from "date-fns";
 import { ArrowLeft, Phone, Calendar, Clock, User, PhoneCall, Tag, FileText } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -17,23 +17,14 @@ export default function LeadDetail() {
   const leadId = parseInt(params.id || "0", 10);
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [location] = useLocation();
 
   const { data: leadData, isLoading: isLoadingLead } = useGetLeadById(leadId);
-  const { data: callsData, isLoading: isLoadingCalls } = useGetCalls({ limit: 100 });
+
+  // Fetch only calls for this lead via dedicated endpoint — server-side filter
+  const { data: callsData, isLoading: isLoadingCalls } = useGetCallsForLead(leadId);
+
   const initiateCallMutation = useInitiateCall();
-
-  // Filter calls for this lead on the client since API doesn't have leadId filter yet
-  const leadCalls = callsData?.calls.filter(c => c.leadId === leadId) || [];
-
-  // Check if we came here with ?call=true
-  useEffect(() => {
-    if (location.includes("?call=true") && !initiateCallMutation.isPending && leadData) {
-      handleCall();
-      // Remove query param to prevent infinite loops if they navigate away and back
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }
-  }, [location, leadData]);
+  const leadCalls = callsData?.calls ?? [];
 
   const handleCall = () => {
     initiateCallMutation.mutate(
@@ -41,16 +32,17 @@ export default function LeadDetail() {
       {
         onSuccess: () => {
           toast({ title: "Call Initiated", description: "The AI agent is now dialing the lead." });
-          queryClient.invalidateQueries({ queryKey: getGetCallsQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getGetCallsForLeadQueryKey(leadId) });
           queryClient.invalidateQueries({ queryKey: getGetLeadByIdQueryKey(leadId) });
         },
-        onError: (err: any) => {
-          toast({ 
-            title: "Failed to initiate call", 
-            description: err?.response?.data?.error || "An error occurred",
-            variant: "destructive"
+        onError: (err: unknown) => {
+          const apiErr = err as { data?: { error?: string } };
+          toast({
+            title: "Failed to initiate call",
+            description: apiErr?.data?.error || "An error occurred",
+            variant: "destructive",
           });
-        }
+        },
       }
     );
   };
@@ -76,13 +68,15 @@ export default function LeadDetail() {
     return (
       <div className="p-8 text-center bg-card border rounded-lg">
         <h2 className="text-xl font-semibold">Lead not found</h2>
-        <p className="text-muted-foreground mt-2 mb-4">The lead you're looking for doesn't exist or has been deleted.</p>
+        <p className="text-muted-foreground mt-2 mb-4">The lead you&apos;re looking for doesn&apos;t exist or has been deleted.</p>
         <Link href="/leads">
           <Button variant="outline">Back to Leads</Button>
         </Link>
       </div>
     );
   }
+
+  const canCall = lead.status !== "calling" && lead.status !== "not_interested";
 
   return (
     <div className="space-y-6">
@@ -96,10 +90,10 @@ export default function LeadDetail() {
           <h1 className="text-2xl font-bold tracking-tight">{lead.name}</h1>
           <LeadStatusBadge status={lead.status} />
         </div>
-        
-        <Button 
-          onClick={handleCall} 
-          disabled={initiateCallMutation.isPending || lead.status === 'completed' || lead.status === 'not_interested'}
+
+        <Button
+          onClick={handleCall}
+          disabled={initiateCallMutation.isPending || !canCall}
           className="w-full sm:w-auto"
         >
           <Phone className="mr-2 h-4 w-4" />
@@ -108,7 +102,7 @@ export default function LeadDetail() {
       </div>
 
       <div className="grid md:grid-cols-3 gap-6">
-        {/* Left Column - Details */}
+        {/* Left Column */}
         <div className="space-y-6">
           <Card>
             <CardHeader>
@@ -168,13 +162,13 @@ export default function LeadDetail() {
             <CardHeader>
               <CardTitle className="text-lg">Call History</CardTitle>
               <CardDescription>
-                {lead.retryCount} total attempts
+                {lead.retryCount} attempt{lead.retryCount !== "1" ? "s" : ""} made
               </CardDescription>
             </CardHeader>
             <CardContent className="flex-1">
               {isLoadingCalls ? (
                 <div className="space-y-4">
-                  {[1, 2, 3].map(i => <Skeleton key={i} className="h-16 w-full" />)}
+                  {[1, 2, 3].map((i) => <Skeleton key={i} className="h-16 w-full" />)}
                 </div>
               ) : leadCalls.length === 0 ? (
                 <div className="h-48 flex flex-col items-center justify-center text-muted-foreground">
@@ -183,41 +177,43 @@ export default function LeadDetail() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {leadCalls.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).map((call, idx) => (
-                    <div key={call.id}>
-                      {idx > 0 && <Separator className="my-4" />}
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-start gap-3">
-                          <div className={`mt-0.5 p-2 rounded-full ${call.callStatus === 'completed' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
-                            <PhoneCall className="h-4 w-4" />
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="font-medium text-sm">Call #{call.id}</span>
-                              <CallStatusBadge status={call.callStatus} className="text-[10px] h-5" />
+                  {[...leadCalls]
+                    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                    .map((call, idx) => (
+                      <div key={call.id}>
+                        {idx > 0 && <Separator className="my-4" />}
+                        <div className="flex items-start justify-between">
+                          <div className="flex items-start gap-3">
+                            <div className={`mt-0.5 p-2 rounded-full ${call.callStatus === "completed" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"}`}>
+                              <PhoneCall className="h-4 w-4" />
                             </div>
-                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                              <span className="flex items-center gap-1">
-                                <Clock className="h-3 w-3" />
-                                {format(new Date(call.createdAt), "MMM d, h:mm a")}
-                              </span>
-                              {call.duration && (
-                                <span>Duration: {call.duration}s</span>
+                            <div>
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="font-medium text-sm">Call #{call.id}</span>
+                                <CallStatusBadge status={call.callStatus} className="text-[10px] h-5" />
+                              </div>
+                              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                <span className="flex items-center gap-1">
+                                  <Clock className="h-3 w-3" />
+                                  {format(new Date(call.createdAt), "MMM d, h:mm a")}
+                                </span>
+                                {call.duration && (
+                                  <span>Duration: {call.duration}s</span>
+                                )}
+                              </div>
+                              {call.transcript && (
+                                <div className="mt-3 text-sm bg-muted p-3 rounded-md border text-foreground/80">
+                                  <div className="flex items-center gap-1.5 font-medium mb-1 text-xs uppercase tracking-wider text-muted-foreground">
+                                    <FileText className="h-3 w-3" /> Transcript snippet
+                                  </div>
+                                  <p className="line-clamp-3">{call.transcript}</p>
+                                </div>
                               )}
                             </div>
-                            {call.transcript && (
-                              <div className="mt-3 text-sm bg-muted p-3 rounded-md border text-foreground/80">
-                                <div className="flex items-center gap-1.5 font-medium mb-1 text-xs uppercase tracking-wider text-muted-foreground">
-                                  <FileText className="h-3 w-3" /> Transcript snippet
-                                </div>
-                                <p className="line-clamp-3">{call.transcript}</p>
-                              </div>
-                            )}
                           </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
                 </div>
               )}
             </CardContent>

@@ -8,6 +8,7 @@
 
 export interface CreateLeadRequest {
   name: string;
+  /** E.164 format required (e.g. +919876543210) */
   phone: string;
   source?: string;
   notes?: string;

@@ -7,20 +7,19 @@ import {
   getCallById,
   triggerCallForLead,
 } from "./calls.service.js";
+import { getLeadById } from "../leads/leads.service.js";
 import { logger } from "../../lib/logger.js";
 
 export async function voiceWebhook(req: Request, res: Response): Promise<void> {
   const leadId = parseInt((req.query.leadId as string) ?? "0");
-  logger.info({ leadId, callSid: req.body?.CallSid }, "Twilio voice webhook");
+  logger.info({ leadId, callSid: (req.body as Record<string, string>)?.CallSid }, "Twilio voice webhook");
 
-  // Always respond with TwiML — never leave Twilio hanging
   try {
     const twiml = generateTwiML(leadId);
     res.setHeader("Content-Type", "text/xml");
     res.send(twiml);
   } catch (err) {
     logger.error({ err, leadId }, "Failed to generate TwiML");
-    // Return a safe fallback that ends the call gracefully
     res.setHeader("Content-Type", "text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
   }
@@ -28,18 +27,14 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
 
 export async function callStatusWebhook(req: Request, res: Response): Promise<void> {
   const leadId = parseInt((req.query.leadId as string) ?? "0");
+  const body = req.body as Record<string, string>;
 
-  const {
-    CallSid: callSid,
-    CallStatus: callStatus,
-    CallDuration: duration,
-    RecordingUrl: recordingUrl,
-  } = req.body as Record<string, string>;
+  const { CallSid: callSid, CallStatus: callStatus, CallDuration: duration, RecordingUrl: recordingUrl } = body;
 
   logger.info({ callSid, callStatus, leadId, duration }, "Twilio call status webhook");
 
   if (!callSid || !callStatus) {
-    logger.warn({ body: req.body }, "Call status webhook missing required fields");
+    logger.warn({ body }, "Call status webhook missing required fields");
     res.status(400).send("Missing CallSid or CallStatus");
     return;
   }
@@ -47,7 +42,6 @@ export async function callStatusWebhook(req: Request, res: Response): Promise<vo
   // Respond immediately — Twilio does not wait for processing
   res.status(204).send();
 
-  // Process asynchronously so we never block Twilio's retry logic
   setImmediate(async () => {
     try {
       await handleCallStatusUpdate(
@@ -80,9 +74,10 @@ export async function initiateCallManually(req: AuthRequest, res: Response): Pro
 
 export async function listCalls(req: AuthRequest, res: Response): Promise<void> {
   try {
-    const { status, limit, offset } = req.query as Record<string, string>;
+    const { status, leadId, limit, offset } = req.query as Record<string, string>;
     const calls = await getCalls({
       status,
+      leadId: leadId ? parseInt(leadId) : undefined,
       limit: limit ? parseInt(limit) : undefined,
       offset: offset ? parseInt(offset) : undefined,
     });
@@ -104,6 +99,29 @@ export async function getCall(req: AuthRequest, res: Response): Promise<void> {
     res.json({ call });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Failed to fetch call";
+    res.status(500).json({ error: msg });
+  }
+}
+
+/** GET /api/leads/:leadId/calls — call history for a specific lead */
+export async function listCallsForLead(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    const leadId = parseInt(req.params.leadId as string);
+    if (!leadId || isNaN(leadId)) {
+      res.status(400).json({ error: "Valid leadId is required" });
+      return;
+    }
+
+    const lead = await getLeadById(leadId);
+    if (!lead) {
+      res.status(404).json({ error: "Lead not found" });
+      return;
+    }
+
+    const calls = await getCalls({ leadId });
+    res.json({ calls, count: calls.length });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Failed to fetch calls for lead";
     res.status(500).json({ error: msg });
   }
 }

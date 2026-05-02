@@ -7,6 +7,7 @@ import {
   initiateCallManually,
   listCalls,
   getCall,
+  listCallsForLead,
 } from "./calls.controller.js";
 
 const router = Router();
@@ -15,9 +16,12 @@ const router = Router();
 router.post("/voice", twilioValidate, voiceWebhook);
 router.post("/call-status", twilioValidate, callStatusWebhook);
 
-// Authenticated call management endpoints
+// Authenticated call management
 router.post("/call/initiate/:leadId", authMiddleware, initiateCallManually);
 router.get("/calls", authMiddleware, listCalls);
 router.get("/calls/:id", authMiddleware, getCall);
+
+// Call history by lead
+router.get("/leads/:leadId/calls", authMiddleware, listCallsForLead);
 
 export default router;

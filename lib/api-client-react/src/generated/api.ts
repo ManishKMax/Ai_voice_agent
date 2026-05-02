@@ -30,8 +30,10 @@ import type {
   LeadsListResponse,
   LoginRequest,
   LoginResponse,
+  QueueResponse,
   RegisterRequest,
   RegisterResponse,
+  RetryLeadResponse,
   SingleCallResponse,
   SingleLeadResponse,
 } from "./api.schemas";
@@ -633,6 +635,93 @@ export function useGetLeadById<
 }
 
 /**
+ * @summary Get call history for a specific lead
+ */
+export const getGetCallsForLeadUrl = (leadId: number) => {
+  return `/api/leads/${leadId}/calls`;
+};
+
+export const getCallsForLead = async (
+  leadId: number,
+  options?: RequestInit,
+): Promise<CallsListResponse> => {
+  return customFetch<CallsListResponse>(getGetCallsForLeadUrl(leadId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetCallsForLeadQueryKey = (leadId: number) => {
+  return [`/api/leads/${leadId}/calls`] as const;
+};
+
+export const getGetCallsForLeadQueryOptions = <
+  TData = Awaited<ReturnType<typeof getCallsForLead>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  leadId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getCallsForLead>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetCallsForLeadQueryKey(leadId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getCallsForLead>>> = ({
+    signal,
+  }) => getCallsForLead(leadId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!leadId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getCallsForLead>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetCallsForLeadQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getCallsForLead>>
+>;
+export type GetCallsForLeadQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Get call history for a specific lead
+ */
+
+export function useGetCallsForLead<
+  TData = Awaited<ReturnType<typeof getCallsForLead>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  leadId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getCallsForLead>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetCallsForLeadQueryOptions(leadId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
  * @summary Manually initiate a call for a lead
  */
 export const getInitiateCallUrl = (leadId: number) => {
@@ -896,6 +985,157 @@ export function useGetCallById<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary View queue state with enriched lead data
+ */
+export const getGetQueueUrl = () => {
+  return `/api/queue`;
+};
+
+export const getQueue = async (
+  options?: RequestInit,
+): Promise<QueueResponse> => {
+  return customFetch<QueueResponse>(getGetQueueUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetQueueQueryKey = () => {
+  return [`/api/queue`] as const;
+};
+
+export const getGetQueueQueryOptions = <
+  TData = Awaited<ReturnType<typeof getQueue>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<Awaited<ReturnType<typeof getQueue>>, TError, TData>;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetQueueQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getQueue>>> = ({
+    signal,
+  }) => getQueue({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getQueue>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetQueueQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getQueue>>
+>;
+export type GetQueueQueryError = ErrorType<unknown>;
+
+/**
+ * @summary View queue state with enriched lead data
+ */
+
+export function useGetQueue<
+  TData = Awaited<ReturnType<typeof getQueue>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<Awaited<ReturnType<typeof getQueue>>, TError, TData>;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetQueueQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Manually retry a lead call (only for no_response leads)
+ */
+export const getRetryLeadCallUrl = (leadId: number) => {
+  return `/api/queue/${leadId}/retry`;
+};
+
+export const retryLeadCall = async (
+  leadId: number,
+  options?: RequestInit,
+): Promise<RetryLeadResponse> => {
+  return customFetch<RetryLeadResponse>(getRetryLeadCallUrl(leadId), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRetryLeadCallMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof retryLeadCall>>,
+    TError,
+    { leadId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof retryLeadCall>>,
+  TError,
+  { leadId: number },
+  TContext
+> => {
+  const mutationKey = ["retryLeadCall"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof retryLeadCall>>,
+    { leadId: number }
+  > = (props) => {
+    const { leadId } = props ?? {};
+
+    return retryLeadCall(leadId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RetryLeadCallMutationResult = NonNullable<
+  Awaited<ReturnType<typeof retryLeadCall>>
+>;
+
+export type RetryLeadCallMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Manually retry a lead call (only for no_response leads)
+ */
+export const useRetryLeadCall = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof retryLeadCall>>,
+    TError,
+    { leadId: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof retryLeadCall>>,
+  TError,
+  { leadId: number },
+  TContext
+> => {
+  return useMutation(getRetryLeadCallMutationOptions(options));
+};
 
 /**
  * @summary Get dashboard statistics

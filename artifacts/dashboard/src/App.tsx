@@ -1,10 +1,11 @@
-import React, { useEffect } from "react";
-import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
+import React from "react";
+import { Switch, Route, Router as WouterRouter } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { Layout } from "@/components/layout";
+import { Redirect } from "wouter";
 
 import NotFound from "@/pages/not-found";
 import Login from "@/pages/login";
@@ -23,35 +24,33 @@ const queryClient = new QueryClient({
   },
 });
 
-function ProtectedRoute({ component: Component, ...rest }: { component: React.ComponentType<any>, [key: string]: any }) {
+// Stable wrapper — not recreated on every render
+function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
   const { isAuthenticated } = useAuth();
-  const [, setLocation] = useLocation();
-
-  useEffect(() => {
-    if (!isAuthenticated) {
-      setLocation("/login");
-    }
-  }, [isAuthenticated, setLocation]);
-
-  if (!isAuthenticated) return null;
-
+  if (!isAuthenticated) return <Redirect to="/login" />;
   return (
     <Layout>
-      <Component {...rest} />
+      <Component />
     </Layout>
   );
 }
+
+// Pre-bind stable route components so Wouter never sees a new type reference
+const ProtectedDashboard = () => <ProtectedRoute component={Dashboard} />;
+const ProtectedLeads = () => <ProtectedRoute component={Leads} />;
+const ProtectedLeadDetail = () => <ProtectedRoute component={LeadDetail} />;
+const ProtectedCalls = () => <ProtectedRoute component={Calls} />;
 
 function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
       <Route path="/register" component={Register} />
-      <Route path="/" component={() => <ProtectedRoute component={Dashboard} />} />
-      <Route path="/dashboard" component={() => <ProtectedRoute component={Dashboard} />} />
-      <Route path="/leads" component={() => <ProtectedRoute component={Leads} />} />
-      <Route path="/leads/:id" component={() => <ProtectedRoute component={LeadDetail} />} />
-      <Route path="/calls" component={() => <ProtectedRoute component={Calls} />} />
+      <Route path="/" component={ProtectedDashboard} />
+      <Route path="/dashboard" component={ProtectedDashboard} />
+      <Route path="/leads" component={ProtectedLeads} />
+      <Route path="/leads/:id" component={ProtectedLeadDetail} />
+      <Route path="/calls" component={ProtectedCalls} />
       <Route component={NotFound} />
     </Switch>
   );

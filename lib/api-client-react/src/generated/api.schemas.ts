@@ -66,6 +66,7 @@ export interface Lead {
 
 export interface CreateLeadRequest {
   name: string;
+  /** E.164 format required (e.g. +919876543210) */
   phone: string;
   source?: string;
   notes?: string;
@@ -123,6 +124,39 @@ export interface SingleCallResponse {
   call: Call;
 }
 
+export type QueueJobLead = {
+  id?: number;
+  name?: string;
+  phone?: string;
+  status?: string;
+  retryCount?: string;
+} | null;
+
+export interface QueueJob {
+  id: string;
+  leadId: number;
+  attempts: number;
+  scheduledAt: string;
+  lead?: QueueJobLead;
+}
+
+export type QueueResponseStats = {
+  total: number;
+  pending: number;
+  scheduled: number;
+};
+
+export interface QueueResponse {
+  stats: QueueResponseStats;
+  jobs: QueueJob[];
+}
+
+export interface RetryLeadResponse {
+  message: string;
+  leadId: number;
+  previousStatus: string;
+}
+
 export type DashboardStatsLeadsByStatus = { [key: string]: number };
 
 export type DashboardStatsLeads = {
@@ -165,6 +199,7 @@ export type GetLeadsParams = {
 
 export type GetCallsParams = {
   status?: string;
+  leadId?: number;
   limit?: number;
   offset?: number;
 };

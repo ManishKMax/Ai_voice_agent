@@ -6,9 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type GetCallsParams = {
+export type QueueJobLead = {
+  id?: number;
+  name?: string;
+  phone?: string;
   status?: string;
-  leadId?: number;
-  limit?: number;
-  offset?: number;
-};
+  retryCount?: string;
+} | null;

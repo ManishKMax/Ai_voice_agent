@@ -148,13 +148,24 @@ export async function handleCallStatusUpdate(
   return updated;
 }
 
-export async function getCalls(filters?: { status?: string; limit?: number; offset?: number }) {
-  return db
+export async function getCalls(filters?: {
+  status?: string;
+  leadId?: number;
+  limit?: number;
+  offset?: number;
+}) {
+  const whereClause = filters?.leadId
+    ? eq(callsTable.leadId, filters.leadId)
+    : undefined;
+
+  const base = db
     .select()
     .from(callsTable)
     .orderBy(desc(callsTable.createdAt))
     .limit(filters?.limit ?? 50)
     .offset(filters?.offset ?? 0);
+
+  return whereClause ? base.where(whereClause) : base;
 }
 
 export async function getCallById(id: number) {

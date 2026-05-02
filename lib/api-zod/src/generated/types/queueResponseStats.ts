@@ -6,9 +6,8 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type GetCallsParams = {
-  status?: string;
-  leadId?: number;
-  limit?: number;
-  offset?: number;
+export type QueueResponseStats = {
+  total: number;
+  pending: number;
+  scheduled: number;
 };

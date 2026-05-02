@@ -47,7 +47,7 @@ export const LoginUserResponse = zod.object({
  */
 export const CreateLeadBody = zod.object({
   name: zod.string(),
-  phone: zod.string(),
+  phone: zod.string().describe("E.164 format required (e.g. +919876543210)"),
   source: zod.string().optional(),
   notes: zod.string().optional(),
 });
@@ -127,6 +127,38 @@ export const GetLeadByIdResponse = zod.object({
 });
 
 /**
+ * @summary Get call history for a specific lead
+ */
+export const GetCallsForLeadParams = zod.object({
+  leadId: zod.coerce.number(),
+});
+
+export const GetCallsForLeadResponse = zod.object({
+  calls: zod.array(
+    zod.object({
+      id: zod.number(),
+      leadId: zod.number(),
+      twilioCallSid: zod.string().nullish(),
+      callStatus: zod.enum([
+        "initiated",
+        "ringing",
+        "answered",
+        "completed",
+        "no-answer",
+        "busy",
+        "failed",
+      ]),
+      duration: zod.number().nullish(),
+      recordingUrl: zod.string().nullish(),
+      transcript: zod.string().nullish(),
+      createdAt: zod.coerce.date(),
+      updatedAt: zod.coerce.date(),
+    }),
+  ),
+  count: zod.number(),
+});
+
+/**
  * @summary Manually initiate a call for a lead
  */
 export const InitiateCallParams = zod.object({
@@ -146,6 +178,7 @@ export const getCallsQueryOffsetDefault = 0;
 
 export const GetCallsQueryParams = zod.object({
   status: zod.coerce.string().optional(),
+  leadId: zod.coerce.number().optional(),
   limit: zod.coerce.number().default(getCallsQueryLimitDefault),
   offset: zod.coerce.number().default(getCallsQueryOffsetDefault),
 });
@@ -202,6 +235,47 @@ export const GetCallByIdResponse = zod.object({
     createdAt: zod.coerce.date(),
     updatedAt: zod.coerce.date(),
   }),
+});
+
+/**
+ * @summary View queue state with enriched lead data
+ */
+export const GetQueueResponse = zod.object({
+  stats: zod.object({
+    total: zod.number(),
+    pending: zod.number(),
+    scheduled: zod.number(),
+  }),
+  jobs: zod.array(
+    zod.object({
+      id: zod.string(),
+      leadId: zod.number(),
+      attempts: zod.number(),
+      scheduledAt: zod.string(),
+      lead: zod
+        .object({
+          id: zod.number().optional(),
+          name: zod.string().optional(),
+          phone: zod.string().optional(),
+          status: zod.string().optional(),
+          retryCount: zod.string().optional(),
+        })
+        .nullish(),
+    }),
+  ),
+});
+
+/**
+ * @summary Manually retry a lead call (only for no_response leads)
+ */
+export const RetryLeadCallParams = zod.object({
+  leadId: zod.coerce.number(),
+});
+
+export const RetryLeadCallResponse = zod.object({
+  message: zod.string(),
+  leadId: zod.number(),
+  previousStatus: zod.string(),
 });
 
 /**

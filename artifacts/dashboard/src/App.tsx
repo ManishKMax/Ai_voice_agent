@@ -15,6 +15,7 @@ import Leads from "@/pages/leads";
 import LeadDetail from "@/pages/lead-detail";
 import Calls from "@/pages/calls";
 import AgentSettings from "@/pages/agent";
+import Settings from "@/pages/settings";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -42,6 +43,7 @@ const ProtectedLeads = () => <ProtectedRoute component={Leads} />;
 const ProtectedLeadDetail = () => <ProtectedRoute component={LeadDetail} />;
 const ProtectedCalls = () => <ProtectedRoute component={Calls} />;
 const ProtectedAgentSettings = () => <ProtectedRoute component={AgentSettings} />;
+const ProtectedSettings = () => <ProtectedRoute component={Settings} />;
 
 function Router() {
   return (
@@ -54,6 +56,7 @@ function Router() {
       <Route path="/leads/:id" component={ProtectedLeadDetail} />
       <Route path="/calls" component={ProtectedCalls} />
       <Route path="/agent" component={ProtectedAgentSettings} />
+      <Route path="/settings" component={ProtectedSettings} />
       <Route component={NotFound} />
     </Switch>
   );

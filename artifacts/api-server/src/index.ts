@@ -5,6 +5,7 @@ import { registerProcessor } from "./modules/queue/queue.service.js";
 import { triggerCallForLead } from "./modules/calls/calls.service.js";
 import { resetStuckCallingLeads } from "./modules/leads/leads.service.js";
 import { loadAgentConfig } from "./config/agent.config.js";
+import { loadPlatformSettings } from "./config/platform.config.js";
 
 const rawPort = process.env["PORT"];
 if (!rawPort) {
@@ -26,6 +27,13 @@ const httpServer = http.createServer(app);
 
 httpServer.listen(port, async () => {
   logger.info({ port }, "Server listening");
+
+  // Load persisted platform credentials from DB (overrides env-var defaults)
+  try {
+    await loadPlatformSettings();
+  } catch (err) {
+    logger.error({ err }, "Failed to load platform settings on startup");
+  }
 
   // Load persisted agent config from DB (falls back to env defaults if not set)
   try {

@@ -4,6 +4,11 @@ import { logger } from "../lib/logger.js";
 
 let _client: ReturnType<typeof twilio> | null = null;
 
+/** Called by platform.config.ts when credentials are updated at runtime. */
+export function resetClient() {
+  _client = null;
+}
+
 function getClient() {
   if (!_client) {
     if (!config.twilio.accountSid || !config.twilio.authToken) {

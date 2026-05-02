@@ -7,6 +7,7 @@ import queueRouter from "../modules/queue/queue.routes.js";
 import dashboardRouter from "../modules/dashboard/dashboard.routes.js";
 import aiRouter from "../modules/ai/ai.routes.js";
 import agentRouter from "../modules/agent/agent.routes.js";
+import settingsRouter from "../modules/settings/settings.routes.js";
 
 const router: IRouter = Router();
 
@@ -18,5 +19,6 @@ router.use(queueRouter);
 router.use(dashboardRouter);
 router.use(aiRouter);
 router.use(agentRouter);
+router.use(settingsRouter);
 
 export default router;

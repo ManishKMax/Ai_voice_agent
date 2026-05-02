@@ -1,105 +1,191 @@
 import React, { useState } from "react";
-import { useGetCalls, useAnalyzeCall, useGetCallById, getGetCallByIdQueryKey } from "@workspace/api-client-react";
+import { useGetCalls, useGetCallById, getGetCallByIdQueryKey } from "@workspace/api-client-react";
 import { format } from "date-fns";
 import { Link } from "wouter";
-import { Search, Filter, PlayCircle, ExternalLink, Activity, FileText } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
-
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Filter, Bot, User, MessageSquare, Clock, Phone,
+  Calendar, Hash, ChevronRight, MessagesSquare,
+} from "lucide-react";
+import {
+  Table, TableBody, TableCell, TableHead,
+  TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { CallStatusBadge } from "@/components/status-badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Select, SelectContent, SelectItem,
+  SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
+  Dialog, DialogContent, DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useToast } from "@/hooks/use-toast";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
-function CallDetailDialog({ callId, open, onOpenChange }: { callId: number | null, open: boolean, onOpenChange: (open: boolean) => void }) {
-  const { data, isLoading } = useGetCallById(callId || 0, { query: { queryKey: getGetCallByIdQueryKey(callId || 0), enabled: !!callId && open } });
+// ── Transcript parsing ────────────────────────────────────────────────────────
+
+interface Turn { speaker: "Agent" | "Lead"; text: string; }
+
+function parseTranscript(raw: string | null | undefined): Turn[] {
+  if (!raw) return [];
+  return raw
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean)
+    .flatMap(line => {
+      if (line.startsWith("Agent:")) {
+        return [{ speaker: "Agent" as const, text: line.slice(6).trim() }];
+      }
+      if (line.startsWith("Lead:")) {
+        return [{ speaker: "Lead" as const, text: line.slice(5).trim() }];
+      }
+      return [];
+    });
+}
+
+// ── Chat bubble ──────────────────────────────────────────────────────────────
+
+function TurnBubble({ turn, index }: { turn: Turn; index: number }) {
+  const isAgent = turn.speaker === "Agent";
+
+  return (
+    <div className={`flex gap-2.5 ${isAgent ? "justify-start" : "justify-end"}`}>
+      {isAgent && (
+        <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center mt-0.5">
+          <Bot className="h-3.5 w-3.5 text-primary" />
+        </div>
+      )}
+
+      <div className={`max-w-[78%] space-y-0.5 ${isAgent ? "" : "items-end flex flex-col"}`}>
+        <span className="text-[10px] font-medium text-muted-foreground px-1">
+          {isAgent ? "Agent" : "Lead"} · Turn {Math.floor(index / 2) + 1}
+        </span>
+        <div
+          className={`rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
+            isAgent
+              ? "bg-primary/8 text-foreground rounded-tl-sm border border-primary/10"
+              : "bg-muted text-foreground rounded-tr-sm"
+          }`}
+        >
+          {turn.text}
+        </div>
+      </div>
+
+      {!isAgent && (
+        <div className="flex-shrink-0 w-7 h-7 rounded-full bg-muted-foreground/10 flex items-center justify-center mt-0.5">
+          <User className="h-3.5 w-3.5 text-muted-foreground" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Transcript dialog ────────────────────────────────────────────────────────
+
+function TranscriptDialog({
+  callId, open, onOpenChange,
+}: { callId: number | null; open: boolean; onOpenChange: (o: boolean) => void }) {
+  const { data, isLoading } = useGetCallById(callId ?? 0, {
+    query: {
+      queryKey: getGetCallByIdQueryKey(callId ?? 0),
+      enabled: !!callId && open,
+    },
+  });
+
+  const turns = parseTranscript(data?.call?.transcript);
+  const agentTurns = turns.filter(t => t.speaker === "Agent").length;
+  const leadTurns = turns.filter(t => t.speaker === "Lead").length;
+  const hasTranscript = turns.length > 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px]">
-        <DialogHeader>
-          <DialogTitle>Call Details #{callId}</DialogTitle>
-          <DialogDescription>
-            Detailed information and analysis for this call.
-          </DialogDescription>
-        </DialogHeader>
-        {isLoading ? (
-          <div className="space-y-4 py-4">
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-32 w-full" />
-          </div>
-        ) : data ? (
-          <div className="space-y-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Status</p>
-                <div className="mt-1"><CallStatusBadge status={data.call.callStatus} /></div>
-              </div>
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Duration</p>
-                <p className="mt-1">{data.call.duration ? `${data.call.duration}s` : "N/A"}</p>
-              </div>
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Date</p>
-                <p className="mt-1 text-sm">{format(new Date(data.call.createdAt), "MMM d, yyyy h:mm a")}</p>
-              </div>
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Twilio SID</p>
-                <p className="mt-1 text-sm font-mono">{data.call.twilioCallSid || "N/A"}</p>
-              </div>
-            </div>
-            
-            {data.call.recordingUrl && (
-              <div>
-                <p className="text-sm font-medium text-muted-foreground mb-2">Recording</p>
-                <audio src={data.call.recordingUrl} controls className="w-full h-10" />
-              </div>
+      <DialogContent className="sm:max-w-[640px] p-0 gap-0 overflow-hidden">
+        <DialogHeader className="px-5 pt-5 pb-4 border-b bg-muted/30">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <MessagesSquare className="h-4 w-4 text-primary" />
+            Call Transcript
+            {callId && (
+              <span className="text-muted-foreground font-normal text-sm">#{callId}</span>
             )}
-            
-            <div>
-              <p className="text-sm font-medium text-muted-foreground mb-2 flex items-center gap-1">
-                <FileText className="h-4 w-4" /> Transcript
-              </p>
-              <div className="bg-muted p-3 rounded-md text-sm whitespace-pre-wrap max-h-[300px] overflow-y-auto">
-                {data.call.transcript || <span className="italic opacity-50">No transcript available.</span>}
+          </DialogTitle>
+
+          {/* Metadata bar */}
+          {!isLoading && data?.call && (
+            <div className="flex flex-wrap gap-3 mt-2.5">
+              <MetaBadge icon={<Phone className="h-3 w-3" />}>
+                <CallStatusBadge status={data.call.callStatus} />
+              </MetaBadge>
+              {data.call.duration != null && (
+                <MetaBadge icon={<Clock className="h-3 w-3" />}>
+                  {data.call.duration}s
+                </MetaBadge>
+              )}
+              <MetaBadge icon={<Calendar className="h-3 w-3" />}>
+                {format(new Date(data.call.createdAt), "MMM d, yyyy · h:mm a")}
+              </MetaBadge>
+              {hasTranscript && (
+                <MetaBadge icon={<MessageSquare className="h-3 w-3" />}>
+                  {agentTurns} agent · {leadTurns} lead
+                </MetaBadge>
+              )}
+            </div>
+          )}
+        </DialogHeader>
+
+        {/* Body */}
+        <div className="flex flex-col" style={{ height: "480px" }}>
+          {isLoading ? (
+            <div className="p-5 space-y-4">
+              {[1, 2, 3, 4].map(i => (
+                <div key={i} className={`flex gap-2.5 ${i % 2 === 0 ? "justify-end" : ""}`}>
+                  {i % 2 !== 0 && <Skeleton className="h-7 w-7 rounded-full flex-shrink-0" />}
+                  <Skeleton className={`h-14 rounded-2xl ${i % 2 !== 0 ? "w-64" : "w-48"}`} />
+                  {i % 2 === 0 && <Skeleton className="h-7 w-7 rounded-full flex-shrink-0" />}
+                </div>
+              ))}
+            </div>
+          ) : !hasTranscript ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground p-8">
+              <MessageSquare className="h-10 w-10 opacity-20" />
+              <div className="text-center">
+                <p className="font-medium text-sm">No transcript available</p>
+                <p className="text-xs mt-1 opacity-70">
+                  {data?.call?.callStatus === "completed"
+                    ? "This call completed but no conversation was recorded."
+                    : "Transcript will appear here once the call finishes."}
+                </p>
               </div>
             </div>
-          </div>
-        ) : (
-          <div className="py-8 text-center text-muted-foreground">Failed to load call details.</div>
-        )}
+          ) : (
+            <ScrollArea className="flex-1">
+              <div className="p-5 space-y-4">
+                {turns.map((turn, i) => (
+                  <TurnBubble key={i} turn={turn} index={i} />
+                ))}
+              </div>
+            </ScrollArea>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );
 }
 
+function MetaBadge({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      {icon}
+      {children}
+    </div>
+  );
+}
+
+// ── Main Calls page ──────────────────────────────────────────────────────────
+
 export default function Calls() {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const [statusFilter, setStatusFilter] = useState<any>(undefined);
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
   const [selectedCallId, setSelectedCallId] = useState<number | null>(null);
 
   const { data, isLoading } = useGetCalls({
@@ -107,35 +193,22 @@ export default function Calls() {
     limit: 50,
   });
 
-  const analyzeMutation = useAnalyzeCall();
-
-  const handleAnalyze = (callId: number) => {
-    analyzeMutation.mutate(
-      { callId },
-      {
-        onSuccess: () => {
-          toast({ title: "Analysis initiated", description: "Call is being analyzed by AI." });
-        },
-        onError: () => {
-          toast({ title: "Analysis failed", variant: "destructive" });
-        }
-      }
-    );
-  };
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Call Log</h1>
-          <p className="text-sm text-muted-foreground mt-1">History of all outbound AI interactions</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            History of all outbound AI interactions
+          </p>
         </div>
       </div>
 
+      {/* Filters */}
       <div className="flex flex-col sm:flex-row items-center gap-4 bg-card p-4 border rounded-lg">
-        <div className="w-full sm:w-48 flex items-center gap-2">
+        <div className="w-full sm:w-52 flex items-center gap-2">
           <Filter className="h-4 w-4 text-muted-foreground shrink-0" />
-          <Select value={statusFilter || "all"} onValueChange={(v) => setStatusFilter(v)}>
+          <Select value={statusFilter ?? "all"} onValueChange={v => setStatusFilter(v)}>
             <SelectTrigger>
               <SelectValue placeholder="Filter by status" />
             </SelectTrigger>
@@ -153,17 +226,18 @@ export default function Calls() {
         </div>
       </div>
 
+      {/* Table */}
       <div className="border rounded-lg bg-card">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-20">ID</TableHead>
+              <TableHead className="w-16">ID</TableHead>
               <TableHead>Lead</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Duration</TableHead>
               <TableHead>Date</TableHead>
               <TableHead>Twilio SID</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead className="text-right">Transcript</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -175,8 +249,8 @@ export default function Calls() {
                   <TableCell><Skeleton className="h-6 w-[80px] rounded-full" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-[40px]" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-[100px]" /></TableCell>
-                  <TableCell><Skeleton className="h-4 w-[150px]" /></TableCell>
-                  <TableCell className="text-right"><Skeleton className="h-8 w-[80px] ml-auto" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-[120px]" /></TableCell>
+                  <TableCell className="text-right"><Skeleton className="h-8 w-[90px] ml-auto" /></TableCell>
                 </TableRow>
               ))
             ) : data?.calls.length === 0 ? (
@@ -186,65 +260,77 @@ export default function Calls() {
                 </TableCell>
               </TableRow>
             ) : (
-              data?.calls.map((call) => (
-                <TableRow key={call.id}>
-                  <TableCell>
-                    <button 
-                      onClick={() => setSelectedCallId(call.id)}
-                      className="font-medium text-primary hover:underline"
-                    >
-                      #{call.id}
-                    </button>
-                  </TableCell>
-                  <TableCell>
-                    <Link href={`/leads/${call.leadId}`} className="hover:underline font-medium text-foreground">
-                      View Lead {call.leadId}
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    <CallStatusBadge status={call.callStatus} />
-                  </TableCell>
-                  <TableCell>
-                    {call.duration ? `${call.duration}s` : "—"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {format(new Date(call.createdAt), "MMM d, yyyy h:mm a")}
-                  </TableCell>
-                  <TableCell>
-                    {call.twilioCallSid ? (
-                      <span className="font-mono text-xs text-muted-foreground bg-muted px-2 py-1 rounded">
-                        {call.twilioCallSid.substring(0, 8)}...
-                      </span>
-                    ) : "—"}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button 
-                      variant="outline" 
-                      size="sm" 
-                      className="h-8 text-xs"
-                      onClick={() => handleAnalyze(call.id)}
-                      disabled={analyzeMutation.isPending || call.callStatus !== "completed"}
-                    >
-                      <Activity className="mr-2 h-3 w-3" />
-                      {analyzeMutation.isPending ? "..." : "Analyze"}
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))
+              data?.calls.map(call => {
+                const hasTranscript = !!call.transcript;
+                return (
+                  <TableRow key={call.id} className="group">
+                    <TableCell>
+                      <span className="font-mono text-xs text-muted-foreground">#{call.id}</span>
+                    </TableCell>
+                    <TableCell>
+                      <Link
+                        href={`/leads/${call.leadId}`}
+                        className="hover:underline font-medium text-foreground flex items-center gap-1"
+                      >
+                        Lead {call.leadId}
+                        <ChevronRight className="h-3 w-3 opacity-0 group-hover:opacity-60 transition-opacity" />
+                      </Link>
+                    </TableCell>
+                    <TableCell>
+                      <CallStatusBadge status={call.callStatus} />
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {call.duration ? (
+                        <span className="flex items-center gap-1">
+                          <Clock className="h-3 w-3 opacity-50" />
+                          {call.duration}s
+                        </span>
+                      ) : "—"}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-sm">
+                      {format(new Date(call.createdAt), "MMM d, h:mm a")}
+                    </TableCell>
+                    <TableCell>
+                      {call.twilioCallSid ? (
+                        <span className="font-mono text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                          {call.twilioCallSid.substring(0, 10)}…
+                        </span>
+                      ) : "—"}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant={hasTranscript ? "default" : "ghost"}
+                        size="sm"
+                        className="h-8 text-xs"
+                        disabled={!hasTranscript}
+                        onClick={() => setSelectedCallId(call.id)}
+                        title={hasTranscript ? "View conversation transcript" : "No transcript available"}
+                      >
+                        <MessagesSquare className="h-3.5 w-3.5 mr-1.5" />
+                        {hasTranscript ? "View Chat" : "No Chat"}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>
+
         {data && (
           <div className="p-4 border-t text-xs text-muted-foreground flex justify-between items-center">
             <span>Showing {data.calls.length} of {data.count} calls</span>
+            <span>
+              {data.calls.filter(c => c.transcript).length} with transcripts
+            </span>
           </div>
         )}
       </div>
 
-      <CallDetailDialog 
-        callId={selectedCallId} 
-        open={selectedCallId !== null} 
-        onOpenChange={(open) => !open && setSelectedCallId(null)} 
+      <TranscriptDialog
+        callId={selectedCallId}
+        open={selectedCallId !== null}
+        onOpenChange={open => !open && setSelectedCallId(null)}
       />
     </div>
   );

@@ -144,4 +144,32 @@ router.get("/sarvam/stats", requireRole("SUPER_ADMIN", "COMPANY_ADMIN"), async (
   }
 });
 
+router.patch("/tenants/:id/active", async (req: AuthRequest, res, next): Promise<void> => {
+  try {
+    const id = parseInt(req.params["id"] as string, 10);
+    if (isNaN(id)) { res.status(400).json({ error: "Invalid tenant ID" }); return; }
+    const { isActive } = req.body;
+    if (typeof isActive !== "boolean") { res.status(400).json({ error: "isActive must be a boolean" }); return; }
+    const [updated] = await db
+      .update(tenantsTable)
+      .set({ isActive, updatedAt: new Date() })
+      .where(eq(tenantsTable.id, id))
+      .returning({ id: tenantsTable.id, isActive: tenantsTable.isActive });
+    if (!updated) { res.status(404).json({ error: "Tenant not found" }); return; }
+    await createAuditLog({ userId: req.userId, action: isActive ? "ADMIN_ACTIVATED_TENANT" : "ADMIN_DEACTIVATED_TENANT", targetType: "tenant", targetId: id });
+    res.json({ tenant: updated });
+  } catch (err) { next(err); }
+});
+
+router.delete("/tenants/:id", async (req: AuthRequest, res, next): Promise<void> => {
+  try {
+    const id = parseInt(req.params["id"] as string, 10);
+    if (isNaN(id)) { res.status(400).json({ error: "Invalid tenant ID" }); return; }
+    const [deleted] = await db.delete(tenantsTable).where(eq(tenantsTable.id, id)).returning({ id: tenantsTable.id });
+    if (!deleted) { res.status(404).json({ error: "Tenant not found" }); return; }
+    await createAuditLog({ userId: req.userId, action: "ADMIN_DELETED_TENANT", targetType: "tenant", targetId: id });
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
 export default router;

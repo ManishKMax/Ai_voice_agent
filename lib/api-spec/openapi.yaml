@@ -386,6 +386,45 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /calls/{id}/outcome:
+    patch:
+      operationId: updateCallOutcome
+      tags: [calls]
+      summary: Set or update the outcome of a completed call
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCallOutcomeRequest"
+      responses:
+        "200":
+          description: Updated call
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SingleCallResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /queue:
     get:
       operationId: getQueue
@@ -734,6 +773,20 @@ components:
           type: string
           nullable: true
           description: "human | machine | unknown (Twilio AMD)"
+        outcome:
+          type: string
+          nullable: true
+          enum: [INTERESTED, NOT_INTERESTED, NO_RESPONSE]
+        followUpDate:
+          type: string
+          nullable: true
+          format: date
+        followUpTime:
+          type: string
+          nullable: true
+        outcomeNotes:
+          type: string
+          nullable: true
         createdAt:
           type: string
           format: date-time
@@ -741,6 +794,24 @@ components:
           type: string
           format: date-time
       required: [id, leadId, callStatus, createdAt, updatedAt]
+
+    UpdateCallOutcomeRequest:
+      type: object
+      properties:
+        outcome:
+          type: string
+          enum: [INTERESTED, NOT_INTERESTED, NO_RESPONSE]
+        followUpDate:
+          type: string
+          format: date
+          nullable: true
+        followUpTime:
+          type: string
+          nullable: true
+        outcomeNotes:
+          type: string
+          nullable: true
+      required: [outcome]
 
     InitiateCallResponse:
       type: object

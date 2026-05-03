@@ -1,47 +1,16 @@
 import { useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { useClerk } from "@clerk/react";
+import { useAuth, useClerk } from "@clerk/react";
 import {
   ArrowLeft, PhoneCall, Clock, IndianRupee, BarChart3,
   CheckCircle, PhoneMissed, PhoneOff, LogOut, AlertTriangle,
   TrendingUp, ChevronLeft, ChevronRight, Download, Calendar, FileText, Phone,
 } from "lucide-react";
 import { useCallStatusSSE } from "@/hooks/useCallStatusSSE";
+import { portalFetch } from "@/lib/portalFetch";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
-
-async function parseJsonOrThrow(res: Response) {
-  const contentType = res.headers.get("content-type") ?? "";
-  if (!contentType.includes("application/json")) {
-    throw new Error("Your session expired. Please sign in again.");
-  }
-  return res.json().catch(() => {
-    throw new Error("Unexpected response from server");
-  });
-}
-
-async function fetchUsage(offset: number, limit: number) {
-  const res = await fetch(`${basePath}/api/portal/usage?offset=${offset}&limit=${limit}`, {
-    credentials: "include",
-  });
-  if (!res.ok) throw new Error("Failed to fetch usage data");
-  return parseJsonOrThrow(res);
-}
-
-async function fetchUsageMonths() {
-  const res = await fetch(`${basePath}/api/portal/usage/months`, { credentials: "include" });
-  if (!res.ok) throw new Error("Failed to fetch months");
-  return parseJsonOrThrow(res);
-}
-
-async function fetchInvoice(year: number, month: number) {
-  const res = await fetch(`${basePath}/api/portal/usage/invoice?year=${year}&month=${month}`, {
-    credentials: "include",
-  });
-  if (!res.ok) throw new Error("Failed to fetch invoice data");
-  return parseJsonOrThrow(res);
-}
 
 function csvEsc(val: unknown): string {
   const s = String(val ?? "");
@@ -110,6 +79,7 @@ const PAGE_SIZE = 20;
 
 export default function Usage() {
   const { signOut } = useClerk();
+  const { getToken } = useAuth();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(0);
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -142,14 +112,20 @@ export default function Usage() {
   const offset = page * PAGE_SIZE;
   const { data, isLoading, error } = useQuery({
     queryKey: ["portal-usage", page],
-    queryFn: () => fetchUsage(offset, PAGE_SIZE),
+    queryFn: async () => {
+      const token = await getToken();
+      return portalFetch(`/api/portal/usage?offset=${offset}&limit=${PAGE_SIZE}`, token);
+    },
     retry: 1,
     keepPreviousData: true,
   } as any);
 
   const { data: monthsData, isLoading: monthsLoading } = useQuery({
     queryKey: ["portal-usage-months"],
-    queryFn: fetchUsageMonths,
+    queryFn: async () => {
+      const token = await getToken();
+      return portalFetch("/api/portal/usage/months", token);
+    },
     retry: 1,
   });
 
@@ -170,7 +146,8 @@ export default function Usage() {
     setIsExporting(true);
     setExportError("");
     try {
-      const invoiceData = await fetchInvoice(y, m);
+      const token = await getToken();
+      const invoiceData = await portalFetch(`/api/portal/usage/invoice?year=${y}&month=${m}`, token);
       const csv = buildCsv(invoiceData);
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
       const url = URL.createObjectURL(blob);

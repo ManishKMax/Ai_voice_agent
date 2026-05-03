@@ -1,29 +1,12 @@
 import { Link } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useClerk } from "@clerk/react";
+import { useAuth, useClerk } from "@clerk/react";
 import {
   ArrowLeft, CreditCard, Zap, Clock, ShieldCheck,
   AlertTriangle, TrendingDown, CheckCircle,
 } from "lucide-react";
 import { useCallStatusSSE } from "@/hooks/useCallStatusSSE";
-
-const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
-
-async function parseJsonOrThrow(res: Response) {
-  const contentType = res.headers.get("content-type") ?? "";
-  if (!contentType.includes("application/json")) {
-    throw new Error("Your session expired. Please sign in again.");
-  }
-  return res.json().catch(() => {
-    throw new Error("Unexpected response from server");
-  });
-}
-
-async function fetchPortalMe() {
-  const res = await fetch(`${basePath}/api/portal/me`, { credentials: "include" });
-  if (!res.ok) throw new Error(res.status === 401 || res.status === 403 ? "Your session expired. Please sign in again." : "Failed to fetch");
-  return parseJsonOrThrow(res);
-}
+import { portalFetch } from "@/lib/portalFetch";
 
 function minuteLevel(min: number): "empty" | "critical" | "low" | "ok" {
   if (min === 0) return "empty";
@@ -34,11 +17,15 @@ function minuteLevel(min: number): "empty" | "critical" | "low" | "ok" {
 
 export default function Billing() {
   const { signOut } = useClerk();
+  const { getToken } = useAuth();
   const queryClient = useQueryClient();
 
   const { data, isLoading } = useQuery({
     queryKey: ["portal-me"],
-    queryFn: fetchPortalMe,
+    queryFn: async () => {
+      const token = await getToken();
+      return portalFetch("/api/portal/me", token);
+    },
     retry: false,
     staleTime: 10_000,
   });

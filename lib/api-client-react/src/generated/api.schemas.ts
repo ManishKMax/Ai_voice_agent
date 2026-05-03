@@ -147,6 +147,14 @@ export const CallStatus = {
   failed: "failed",
 } as const;
 
+export type CallOutcome = (typeof CallOutcome)[keyof typeof CallOutcome] | null;
+
+export const CallOutcome = {
+  INTERESTED: "INTERESTED",
+  NOT_INTERESTED: "NOT_INTERESTED",
+  NO_RESPONSE: "NO_RESPONSE",
+} as const;
+
 export interface Call {
   id: number;
   leadId: number;
@@ -159,8 +167,28 @@ export interface Call {
   interestScore?: number | null;
   /** human | machine | unknown (Twilio AMD) */
   answeredBy?: string | null;
+  outcome?: CallOutcome;
+  followUpDate?: string | null;
+  followUpTime?: string | null;
+  outcomeNotes?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type UpdateCallOutcomeRequestOutcome =
+  (typeof UpdateCallOutcomeRequestOutcome)[keyof typeof UpdateCallOutcomeRequestOutcome];
+
+export const UpdateCallOutcomeRequestOutcome = {
+  INTERESTED: "INTERESTED",
+  NOT_INTERESTED: "NOT_INTERESTED",
+  NO_RESPONSE: "NO_RESPONSE",
+} as const;
+
+export interface UpdateCallOutcomeRequest {
+  outcome: UpdateCallOutcomeRequestOutcome;
+  followUpDate?: string | null;
+  followUpTime?: string | null;
+  outcomeNotes?: string | null;
 }
 
 export interface InitiateCallResponse {

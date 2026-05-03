@@ -11,6 +11,7 @@ import {
   listCalls,
   getCall,
   listCallsForLead,
+  updateOutcome,
 } from "./calls.controller.js";
 
 const router = Router();
@@ -31,5 +32,8 @@ router.get("/calls/:id", authMiddleware, getCall);
 
 // Call history by lead
 router.get("/leads/:leadId/calls", authMiddleware, listCallsForLead);
+
+// Call outcome update
+router.patch("/calls/:id/outcome", authMiddleware, updateOutcome);
 
 export default router;

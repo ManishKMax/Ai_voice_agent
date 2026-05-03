@@ -22,6 +22,7 @@ import {
   handleCallStatusUpdate,
   getCalls,
   getCallById,
+  setCallOutcome,
   triggerCallForLead,
   updateCallTranscript,
 } from "./calls.service.js";
@@ -449,6 +450,48 @@ export async function initiateCallManually(req: AuthRequest, res: Response): Pro
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Call initiation failed";
     res.status(500).json({ error: msg });
+  }
+}
+
+export async function updateOutcome(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    const id = parseInt(req.params.id as string);
+    if (!id || isNaN(id)) {
+      res.status(400).json({ error: "Valid call id is required" });
+      return;
+    }
+
+    const { outcome, followUpDate, followUpTime, outcomeNotes } = req.body as {
+      outcome?: string;
+      followUpDate?: string;
+      followUpTime?: string;
+      outcomeNotes?: string;
+    };
+
+    const validOutcomes = ["INTERESTED", "NOT_INTERESTED", "NO_RESPONSE"] as const;
+    if (!outcome || !validOutcomes.includes(outcome as (typeof validOutcomes)[number])) {
+      res.status(400).json({ error: "outcome must be one of: INTERESTED, NOT_INTERESTED, NO_RESPONSE" });
+      return;
+    }
+
+    const call = await getCallById(id);
+    if (!call) {
+      res.status(404).json({ error: "Call not found" });
+      return;
+    }
+
+    const updated = await setCallOutcome(
+      id,
+      outcome as "INTERESTED" | "NOT_INTERESTED" | "NO_RESPONSE",
+      followUpDate ?? null,
+      followUpTime ?? null,
+      outcomeNotes ?? null,
+    );
+
+    res.json({ call: updated });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Failed to update outcome";
+    res.status(400).json({ error: msg });
   }
 }
 

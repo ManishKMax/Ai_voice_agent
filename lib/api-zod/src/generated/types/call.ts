@@ -5,6 +5,7 @@
  * AI Lead Calling & Qualification System API
  * OpenAPI spec version: 0.1.0
  */
+import type { CallOutcome } from "./callOutcome";
 import type { CallStatus } from "./callStatus";
 
 export interface Call {
@@ -19,6 +20,10 @@ export interface Call {
   interestScore?: number | null;
   /** human | machine | unknown (Twilio AMD) */
   answeredBy?: string | null;
+  outcome?: CallOutcome;
+  followUpDate?: Date | null;
+  followUpTime?: string | null;
+  outcomeNotes?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

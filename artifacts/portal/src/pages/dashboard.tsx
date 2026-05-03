@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useUser, useClerk } from "@clerk/react";
+import { useUser, useClerk, useAuth } from "@clerk/react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import {
@@ -7,6 +7,7 @@ import {
   CheckCircle, Upload, Settings, LogOut, Zap, BarChart3,
   CreditCard, TrendingDown,
 } from "lucide-react";
+import { portalFetch } from "@/lib/portalFetch";
 
 function minuteLevel(min: number): "empty" | "critical" | "low" | "ok" {
   if (min === 0) return "empty";
@@ -24,52 +25,25 @@ const levelStyles = {
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-async function parseJsonOrThrow(res: Response) {
-  const contentType = res.headers.get("content-type") ?? "";
-  if (!contentType.includes("application/json")) {
-    throw new Error("Your session expired. Please sign in again.");
-  }
-  return res.json().catch(() => {
-    throw new Error("Unexpected response from server");
-  });
-}
-
-async function fetchPortalMe() {
-  const res = await fetch(`${basePath}/api/portal/me`, { credentials: "include" });
-  if (!res.ok) {
-    throw new Error(res.status === 401 || res.status === 403 ? "Your session expired. Please sign in again." : "Failed to fetch tenant info");
-  }
-  return parseJsonOrThrow(res);
-}
-
-async function fetchPortalDebugSession() {
-  const res = await fetch(`${basePath}/api/portal/debug/session`, { credentials: "include" });
-  if (!res.ok) {
-    throw new Error(res.status === 401 || res.status === 403 ? "Your session expired. Please sign in again." : "Failed to fetch debug session");
-  }
-  return parseJsonOrThrow(res);
-}
-
 export default function Dashboard() {
   const { isLoaded, user } = useUser();
   const { signOut } = useClerk();
+  const { getToken } = useAuth();
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["portal-me"],
-    queryFn: fetchPortalMe,
-    retry: false,
-    staleTime: 10_000,
-  });
-  const { data: debugSession } = useQuery({
-    queryKey: ["portal-debug-session"],
-    queryFn: fetchPortalDebugSession,
+    queryFn: async () => {
+      const token = await getToken();
+      return portalFetch("/api/portal/me", token);
+    },
+    enabled: isLoaded && !!user,
     retry: false,
     staleTime: 10_000,
   });
 
   useEffect(() => {
     if (isLoaded && user) {
-      void fetchPortalMe().catch(() => undefined);
+      refetch();
     }
   }, [isLoaded, user]);
 
@@ -191,21 +165,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {debugSession && (
-          <div className="bg-white border border-gray-100 rounded-2xl p-4 mb-6 text-sm text-gray-700">
-            <div className="font-semibold mb-1">Debug session</div>
-            <div>Clerk user: {debugSession.clerkUserId}</div>
-            <div>Tenant row exists: {debugSession.hasTenant ? "yes" : "no"}</div>
-            {debugSession.tenant && <div>Tenant email: {debugSession.tenant.email}</div>}
-          </div>
-        )}
-
-        <div className="bg-gray-100 border border-gray-200 rounded-2xl p-4 mb-6 text-xs text-gray-600">
-          <div>Clerk loaded: {isLoaded ? "yes" : "no"}</div>
-          <div>Signed in: {user ? "yes" : "no"}</div>
-          <div>Email: {user?.primaryEmailAddress?.emailAddress ?? "—"}</div>
-        </div>
-
         {tenant && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -262,37 +221,45 @@ export default function Dashboard() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Link to="/leads" className="group bg-white border border-gray-100 rounded-2xl p-6 hover:shadow-md hover:border-indigo-200 transition-all">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="h-10 w-10 bg-indigo-50 rounded-xl flex items-center justify-center group-hover:bg-indigo-100 transition-colors">
-                    <PhoneCall className="h-5 w-5 text-indigo-600" />
-                  </div>
-                  <h3 className="font-semibold text-gray-900">Start Calling</h3>
+              <Link to="/kyc" className="bg-white rounded-2xl border border-gray-100 p-5 hover:shadow-sm transition-shadow flex items-start gap-4">
+                <div className="h-10 w-10 bg-indigo-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <ShieldCheck className="h-5 w-5 text-indigo-500" />
                 </div>
-                <p className="text-sm text-gray-500">Add leads and launch your AI calling campaign.</p>
+                <div>
+                  <div className="font-semibold text-gray-900 text-sm">KYC Verification</div>
+                  <div className="text-xs text-gray-500 mt-0.5">Upload documents to unlock full access</div>
+                </div>
               </Link>
-
-              <Link to="/kyc" className="group bg-white border border-gray-100 rounded-2xl p-6 hover:shadow-md hover:border-indigo-200 transition-all">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="h-10 w-10 bg-green-50 rounded-xl flex items-center justify-center group-hover:bg-green-100 transition-colors">
-                    <Upload className="h-5 w-5 text-green-600" />
-                  </div>
-                  <h3 className="font-semibold text-gray-900">Complete KYC</h3>
+              <Link to="/billing" className="bg-white rounded-2xl border border-gray-100 p-5 hover:shadow-sm transition-shadow flex items-start gap-4">
+                <div className="h-10 w-10 bg-purple-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <CreditCard className="h-5 w-5 text-purple-500" />
                 </div>
-                <p className="text-sm text-gray-500">Upload your Aadhaar & GST to unlock full access.</p>
+                <div>
+                  <div className="font-semibold text-gray-900 text-sm">Billing</div>
+                  <div className="text-xs text-gray-500 mt-0.5">Manage minutes and view usage</div>
+                </div>
               </Link>
-
-              <Link to="/settings" className="group bg-white border border-gray-100 rounded-2xl p-6 hover:shadow-md hover:border-indigo-200 transition-all">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="h-10 w-10 bg-purple-50 rounded-xl flex items-center justify-center group-hover:bg-purple-100 transition-colors">
-                    <Settings className="h-5 w-5 text-purple-600" />
-                  </div>
-                  <h3 className="font-semibold text-gray-900">Connect Calling</h3>
+              <Link to="/settings" className="bg-white rounded-2xl border border-gray-100 p-5 hover:shadow-sm transition-shadow flex items-start gap-4">
+                <div className="h-10 w-10 bg-green-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <Settings className="h-5 w-5 text-green-500" />
                 </div>
-                <p className="text-sm text-gray-500">Link your Twilio or Exotel account to make calls.</p>
+                <div>
+                  <div className="font-semibold text-gray-900 text-sm">Telephony Settings</div>
+                  <div className="text-xs text-gray-500 mt-0.5">Connect your Twilio or Exotel account</div>
+                </div>
               </Link>
             </div>
           </>
+        )}
+
+        {!isLoading && !tenant && !error && (
+          <div className="bg-white rounded-2xl border border-gray-100 p-12 text-center">
+            <div className="h-14 w-14 bg-indigo-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <Zap className="h-7 w-7 text-indigo-400" />
+            </div>
+            <h3 className="font-semibold text-gray-900 mb-2">Setting up your account…</h3>
+            <p className="text-sm text-gray-500">Just a moment while we load your profile.</p>
+          </div>
         )}
       </main>
     </div>

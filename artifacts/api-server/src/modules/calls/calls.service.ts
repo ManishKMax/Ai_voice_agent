@@ -235,6 +235,32 @@ export async function getCallById(id: number) {
   return call;
 }
 
+export async function setCallOutcome(
+  id: number,
+  outcome: "INTERESTED" | "NOT_INTERESTED" | "NO_RESPONSE",
+  followUpDate?: string | null,
+  followUpTime?: string | null,
+  outcomeNotes?: string | null,
+): Promise<typeof callsTable.$inferSelect | undefined> {
+  if (outcome === "INTERESTED" && !followUpDate) {
+    throw new Error("followUpDate is required when outcome is INTERESTED");
+  }
+
+  const [updated] = await db
+    .update(callsTable)
+    .set({
+      outcome,
+      followUpDate: followUpDate ?? null,
+      followUpTime: followUpTime ?? null,
+      outcomeNotes: outcomeNotes ?? null,
+      updatedAt: new Date(),
+    })
+    .where(eq(callsTable.id, id))
+    .returning();
+
+  return updated;
+}
+
 export async function updateCallTranscript(twilioCallSid: string, transcript: string) {
   await db
     .update(callsTable)

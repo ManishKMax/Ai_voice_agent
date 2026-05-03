@@ -39,6 +39,7 @@ import type {
   RetryLeadResponse,
   SingleCallResponse,
   SingleLeadResponse,
+  UpdateCallOutcomeRequest,
   UpdateLeadRequest,
 } from "./api.schemas";
 
@@ -1246,6 +1247,93 @@ export function useGetCallById<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Set or update the outcome of a completed call
+ */
+export const getUpdateCallOutcomeUrl = (id: number) => {
+  return `/api/calls/${id}/outcome`;
+};
+
+export const updateCallOutcome = async (
+  id: number,
+  updateCallOutcomeRequest: UpdateCallOutcomeRequest,
+  options?: RequestInit,
+): Promise<SingleCallResponse> => {
+  return customFetch<SingleCallResponse>(getUpdateCallOutcomeUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updateCallOutcomeRequest),
+  });
+};
+
+export const getUpdateCallOutcomeMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateCallOutcome>>,
+    TError,
+    { id: number; data: BodyType<UpdateCallOutcomeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateCallOutcome>>,
+  TError,
+  { id: number; data: BodyType<UpdateCallOutcomeRequest> },
+  TContext
+> => {
+  const mutationKey = ["updateCallOutcome"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateCallOutcome>>,
+    { id: number; data: BodyType<UpdateCallOutcomeRequest> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updateCallOutcome(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateCallOutcomeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateCallOutcome>>
+>;
+export type UpdateCallOutcomeMutationBody = BodyType<UpdateCallOutcomeRequest>;
+export type UpdateCallOutcomeMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Set or update the outcome of a completed call
+ */
+export const useUpdateCallOutcome = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateCallOutcome>>,
+    TError,
+    { id: number; data: BodyType<UpdateCallOutcomeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateCallOutcome>>,
+  TError,
+  { id: number; data: BodyType<UpdateCallOutcomeRequest> },
+  TContext
+> => {
+  return useMutation(getUpdateCallOutcomeMutationOptions(options));
+};
 
 /**
  * @summary View queue state with enriched lead data

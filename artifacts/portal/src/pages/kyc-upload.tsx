@@ -1,8 +1,9 @@
-import { useUser } from "@clerk/react";
+import { useUser, useAuth } from "@clerk/react";
 import { useState, useRef } from "react";
 import { Link, useLocation } from "wouter";
 import { Upload, ShieldCheck, FileText, ArrowLeft, CheckCircle, Clock, Loader2, AlertCircle, X } from "lucide-react";
 import { useUpload } from "@workspace/object-storage-web";
+import { portalFetch } from "@/lib/portalFetch";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -26,6 +27,7 @@ function createFileState(): FileState {
 
 export default function KycUpload() {
   const [, setLocation] = useLocation();
+  const { getToken } = useAuth();
   const [aadhaar, setAadhaar] = useState<FileState>(createFileState());
   const [gst, setGst] = useState<FileState>(createFileState());
   const [submitting, setSubmitting] = useState(false);
@@ -74,18 +76,11 @@ export default function KycUpload() {
 
     setSubmitting(true);
     try {
-      const res = await fetch(`${basePath}/api/portal/kyc/submit`, {
+      const token = await getToken();
+      await portalFetch("/api/portal/kyc/submit", token, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({ documents }),
       });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Submission failed — please try again");
-      }
-
       setSubmitted(true);
     } catch (err) {
       setSubmitError((err as Error).message);

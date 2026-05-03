@@ -1,10 +1,15 @@
 import React, { useState } from "react";
-import { useGetCalls, useGetCallById, getGetCallByIdQueryKey } from "@workspace/api-client-react";
+import {
+  useGetCalls, useGetCallById, getGetCallByIdQueryKey,
+  useUpdateCallOutcome,
+} from "@workspace/api-client-react";
+import { UpdateCallOutcomeRequestOutcome } from "@workspace/api-client-react";
 import { format } from "date-fns";
 import { Link } from "wouter";
 import {
   Filter, Bot, User, MessageSquare, Clock, Phone,
-  Calendar, Hash, ChevronRight, MessagesSquare,
+  Calendar, Hash, ChevronRight, MessagesSquare, Tag,
+  CheckCircle2, XCircle, MinusCircle,
 } from "lucide-react";
 import {
   Table, TableBody, TableCell, TableHead,
@@ -19,10 +24,14 @@ import {
 } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader,
-  DialogTitle,
+  DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { useQueryClient } from "@tanstack/react-query";
 
 // ── Transcript parsing ────────────────────────────────────────────────────────
 
@@ -37,6 +46,40 @@ function parseTranscript(raw: string | null | undefined): Turn[] {
     else if (trimmed.startsWith("Lead:")) turns.push({ speaker: "Lead", text: trimmed.slice(5).trim() });
   }
   return turns;
+}
+
+// ── Outcome helpers ───────────────────────────────────────────────────────────
+
+type Outcome = "INTERESTED" | "NOT_INTERESTED" | "NO_RESPONSE";
+
+const OUTCOME_META: Record<Outcome, { label: string; color: string; icon: React.ReactNode }> = {
+  INTERESTED: {
+    label: "Interested",
+    color: "bg-green-50 text-green-700 border-green-200",
+    icon: <CheckCircle2 className="h-3 w-3" />,
+  },
+  NOT_INTERESTED: {
+    label: "Not Interested",
+    color: "bg-red-50 text-red-700 border-red-200",
+    icon: <XCircle className="h-3 w-3" />,
+  },
+  NO_RESPONSE: {
+    label: "No Response",
+    color: "bg-gray-100 text-gray-600 border-gray-200",
+    icon: <MinusCircle className="h-3 w-3" />,
+  },
+};
+
+function OutcomeBadge({ outcome }: { outcome: string | null | undefined }) {
+  if (!outcome) return <span className="text-muted-foreground text-xs">—</span>;
+  const meta = OUTCOME_META[outcome as Outcome];
+  if (!meta) return <span className="text-xs">{outcome}</span>;
+  return (
+    <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border ${meta.color}`}>
+      {meta.icon}
+      {meta.label}
+    </span>
+  );
 }
 
 // ── Chat bubble ──────────────────────────────────────────────────────────────
@@ -76,7 +119,7 @@ function TurnBubble({ turn, index }: { turn: Turn; index: number }) {
   );
 }
 
-// ── Transcript dialog ────────────────────────────────────────────────────────
+// ── Transcript dialog ─────────────────────────────────────────────────────────
 
 function TranscriptDialog({
   callId, open, onOpenChange,
@@ -100,21 +143,16 @@ function TranscriptDialog({
           <DialogTitle className="flex items-center gap-2 text-base">
             <MessagesSquare className="h-4 w-4 text-primary" />
             Call Transcript
-            {callId && (
-              <span className="text-muted-foreground font-normal text-sm">#{callId}</span>
-            )}
+            {callId && <span className="text-muted-foreground font-normal text-sm">#{callId}</span>}
           </DialogTitle>
 
-          {/* Metadata bar */}
           {!isLoading && data?.call && (
             <div className="flex flex-wrap gap-3 mt-2.5">
               <MetaBadge icon={<Phone className="h-3 w-3" />}>
                 <CallStatusBadge status={data.call.callStatus} />
               </MetaBadge>
               {data.call.duration != null && (
-                <MetaBadge icon={<Clock className="h-3 w-3" />}>
-                  {data.call.duration}s
-                </MetaBadge>
+                <MetaBadge icon={<Clock className="h-3 w-3" />}>{data.call.duration}s</MetaBadge>
               )}
               <MetaBadge icon={<Calendar className="h-3 w-3" />}>
                 {format(new Date(data.call.createdAt), "MMM d, yyyy · h:mm a")}
@@ -128,7 +166,6 @@ function TranscriptDialog({
           )}
         </DialogHeader>
 
-        {/* Body */}
         <div className="flex flex-col" style={{ height: "480px" }}>
           {isLoading ? (
             <div className="p-5 space-y-4">
@@ -176,11 +213,157 @@ function MetaBadge({ icon, children }: { icon: React.ReactNode; children: React.
   );
 }
 
+// ── Outcome dialog ─────────────────────────────────────────────────────────────
+
+interface OutcomeDialogProps {
+  callId: number | null;
+  currentOutcome?: string | null;
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+}
+
+function OutcomeDialog({ callId, currentOutcome, open, onOpenChange }: OutcomeDialogProps) {
+  const queryClient = useQueryClient();
+  const [outcome, setOutcome] = useState<Outcome | "">(
+    (currentOutcome as Outcome | "") || ""
+  );
+  const [followUpDate, setFollowUpDate] = useState("");
+  const [followUpTime, setFollowUpTime] = useState("");
+  const [notes, setNotes] = useState("");
+  const [error, setError] = useState("");
+
+  const { mutate, isPending } = useUpdateCallOutcome({
+    mutation: {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ["getCalls"] });
+        onOpenChange(false);
+      },
+      onError: (err: Error) => {
+        setError(err.message ?? "Failed to save outcome");
+      },
+    },
+  });
+
+  function handleSave() {
+    if (!callId || !outcome) { setError("Please select an outcome"); return; }
+    if (outcome === "INTERESTED" && !followUpDate) { setError("Follow-up date is required for Interested outcome"); return; }
+    setError("");
+    mutate({
+      id: callId,
+      data: {
+        outcome: outcome as UpdateCallOutcomeRequestOutcome,
+        followUpDate: followUpDate || undefined,
+        followUpTime: followUpTime || undefined,
+        outcomeNotes: notes || undefined,
+      },
+    });
+  }
+
+  function handleOpen(o: boolean) {
+    if (o) {
+      setOutcome((currentOutcome as Outcome | "") || "");
+      setFollowUpDate("");
+      setFollowUpTime("");
+      setNotes("");
+      setError("");
+    }
+    onOpenChange(o);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpen}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Tag className="h-4 w-4 text-primary" />
+            Set Call Outcome
+            {callId && <span className="text-muted-foreground font-normal text-sm">#{callId}</span>}
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label>Outcome</Label>
+            <Select value={outcome} onValueChange={(v) => { setOutcome(v as Outcome); setError(""); }}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select outcome…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="INTERESTED">
+                  <span className="flex items-center gap-2">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> Interested
+                  </span>
+                </SelectItem>
+                <SelectItem value="NOT_INTERESTED">
+                  <span className="flex items-center gap-2">
+                    <XCircle className="h-3.5 w-3.5 text-red-600" /> Not Interested
+                  </span>
+                </SelectItem>
+                <SelectItem value="NO_RESPONSE">
+                  <span className="flex items-center gap-2">
+                    <MinusCircle className="h-3.5 w-3.5 text-gray-500" /> No Response
+                  </span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {outcome === "INTERESTED" && (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Follow-up Date <span className="text-red-500">*</span></Label>
+                <Input
+                  type="date"
+                  value={followUpDate}
+                  onChange={e => setFollowUpDate(e.target.value)}
+                  min={new Date().toISOString().split("T")[0]}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Follow-up Time</Label>
+                <Input
+                  type="time"
+                  value={followUpTime}
+                  onChange={e => setFollowUpTime(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <Label>Notes <span className="text-muted-foreground text-xs">(optional)</span></Label>
+            <Textarea
+              placeholder="Add any notes about this call…"
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              rows={3}
+              className="resize-none"
+            />
+          </div>
+
+          {error && (
+            <p className="text-sm text-destructive">{error}</p>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={handleSave} disabled={isPending || !outcome}>
+            {isPending ? "Saving…" : "Save Outcome"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── Main Calls page ──────────────────────────────────────────────────────────
 
 export default function Calls() {
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
   const [selectedCallId, setSelectedCallId] = useState<number | null>(null);
+  const [outcomeCallId, setOutcomeCallId] = useState<number | null>(null);
+  const [outcomeCallCurrent, setOutcomeCallCurrent] = useState<string | null>(null);
 
   const { data, isLoading } = useGetCalls({
     status: statusFilter === "all" ? undefined : statusFilter,
@@ -228,10 +411,10 @@ export default function Calls() {
               <TableHead className="w-16">ID</TableHead>
               <TableHead>Lead</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>Outcome</TableHead>
               <TableHead>Duration</TableHead>
               <TableHead>Date</TableHead>
-              <TableHead>Twilio SID</TableHead>
-              <TableHead className="text-right">Transcript</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -241,10 +424,10 @@ export default function Calls() {
                   <TableCell><Skeleton className="h-4 w-[20px]" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-[120px]" /></TableCell>
                   <TableCell><Skeleton className="h-6 w-[80px] rounded-full" /></TableCell>
+                  <TableCell><Skeleton className="h-6 w-[90px] rounded-full" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-[40px]" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-[100px]" /></TableCell>
-                  <TableCell><Skeleton className="h-4 w-[120px]" /></TableCell>
-                  <TableCell className="text-right"><Skeleton className="h-8 w-[90px] ml-auto" /></TableCell>
+                  <TableCell className="text-right"><Skeleton className="h-8 w-[160px] ml-auto" /></TableCell>
                 </TableRow>
               ))
             ) : data?.calls.length === 0 ? (
@@ -273,6 +456,9 @@ export default function Calls() {
                     <TableCell>
                       <CallStatusBadge status={call.callStatus} />
                     </TableCell>
+                    <TableCell>
+                      <OutcomeBadge outcome={(call as any).outcome} />
+                    </TableCell>
                     <TableCell className="text-muted-foreground">
                       {call.duration ? (
                         <span className="flex items-center gap-1">
@@ -284,25 +470,32 @@ export default function Calls() {
                     <TableCell className="text-muted-foreground text-sm">
                       {format(new Date(call.createdAt), "MMM d, h:mm a")}
                     </TableCell>
-                    <TableCell>
-                      {call.twilioCallSid ? (
-                        <span className="font-mono text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                          {call.twilioCallSid.substring(0, 10)}…
-                        </span>
-                      ) : "—"}
-                    </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant={hasTranscript ? "default" : "ghost"}
-                        size="sm"
-                        className="h-8 text-xs"
-                        disabled={!hasTranscript}
-                        onClick={() => setSelectedCallId(call.id)}
-                        title={hasTranscript ? "View conversation transcript" : "No transcript available"}
-                      >
-                        <MessagesSquare className="h-3.5 w-3.5 mr-1.5" />
-                        {hasTranscript ? "View Chat" : "No Chat"}
-                      </Button>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={() => {
+                            setOutcomeCallId(call.id);
+                            setOutcomeCallCurrent((call as any).outcome ?? null);
+                          }}
+                        >
+                          <Tag className="h-3.5 w-3.5 mr-1.5" />
+                          Outcome
+                        </Button>
+                        <Button
+                          variant={hasTranscript ? "default" : "ghost"}
+                          size="sm"
+                          className="h-8 text-xs"
+                          disabled={!hasTranscript}
+                          onClick={() => setSelectedCallId(call.id)}
+                          title={hasTranscript ? "View conversation transcript" : "No transcript available"}
+                        >
+                          <MessagesSquare className="h-3.5 w-3.5 mr-1.5" />
+                          {hasTranscript ? "View Chat" : "No Chat"}
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
@@ -314,9 +507,7 @@ export default function Calls() {
         {data && (
           <div className="p-4 border-t text-xs text-muted-foreground flex justify-between items-center">
             <span>Showing {data.calls.length} of {data.count} calls</span>
-            <span>
-              {data.calls.filter(c => c.transcript).length} with transcripts
-            </span>
+            <span>{data.calls.filter(c => c.transcript).length} with transcripts</span>
           </div>
         )}
       </div>
@@ -325,6 +516,13 @@ export default function Calls() {
         callId={selectedCallId}
         open={selectedCallId !== null}
         onOpenChange={open => !open && setSelectedCallId(null)}
+      />
+
+      <OutcomeDialog
+        callId={outcomeCallId}
+        currentOutcome={outcomeCallCurrent}
+        open={outcomeCallId !== null}
+        onOpenChange={open => !open && setOutcomeCallId(null)}
       />
     </div>
   );

@@ -269,6 +269,12 @@ export const GetCallsForLeadResponse = zod.object({
         .string()
         .nullish()
         .describe("human | machine | unknown (Twilio AMD)"),
+      outcome: zod
+        .enum(["INTERESTED", "NOT_INTERESTED", "NO_RESPONSE"])
+        .nullish(),
+      followUpDate: zod.coerce.date().nullish(),
+      followUpTime: zod.string().nullish(),
+      outcomeNotes: zod.string().nullish(),
       createdAt: zod.coerce.date(),
       updatedAt: zod.coerce.date(),
     }),
@@ -327,6 +333,12 @@ export const GetCallsResponse = zod.object({
         .string()
         .nullish()
         .describe("human | machine | unknown (Twilio AMD)"),
+      outcome: zod
+        .enum(["INTERESTED", "NOT_INTERESTED", "NO_RESPONSE"])
+        .nullish(),
+      followUpDate: zod.coerce.date().nullish(),
+      followUpTime: zod.string().nullish(),
+      outcomeNotes: zod.string().nullish(),
       createdAt: zod.coerce.date(),
       updatedAt: zod.coerce.date(),
     }),
@@ -366,6 +378,62 @@ export const GetCallByIdResponse = zod.object({
       .string()
       .nullish()
       .describe("human | machine | unknown (Twilio AMD)"),
+    outcome: zod
+      .enum(["INTERESTED", "NOT_INTERESTED", "NO_RESPONSE"])
+      .nullish(),
+    followUpDate: zod.coerce.date().nullish(),
+    followUpTime: zod.string().nullish(),
+    outcomeNotes: zod.string().nullish(),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+  }),
+});
+
+/**
+ * @summary Set or update the outcome of a completed call
+ */
+export const UpdateCallOutcomeParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const UpdateCallOutcomeBody = zod.object({
+  outcome: zod.enum(["INTERESTED", "NOT_INTERESTED", "NO_RESPONSE"]),
+  followUpDate: zod.coerce.date().nullish(),
+  followUpTime: zod.string().nullish(),
+  outcomeNotes: zod.string().nullish(),
+});
+
+export const UpdateCallOutcomeResponse = zod.object({
+  call: zod.object({
+    id: zod.number(),
+    leadId: zod.number(),
+    twilioCallSid: zod.string().nullish(),
+    callStatus: zod.enum([
+      "initiated",
+      "ringing",
+      "answered",
+      "completed",
+      "no-answer",
+      "busy",
+      "failed",
+    ]),
+    duration: zod.number().nullish(),
+    recordingUrl: zod.string().nullish(),
+    transcript: zod.string().nullish(),
+    interestScore: zod
+      .number()
+      .nullish()
+      .describe("AI-computed interest score 0-100"),
+    answeredBy: zod
+      .string()
+      .nullish()
+      .describe("human | machine | unknown (Twilio AMD)"),
+    outcome: zod
+      .enum(["INTERESTED", "NOT_INTERESTED", "NO_RESPONSE"])
+      .nullish(),
+    followUpDate: zod.coerce.date().nullish(),
+    followUpTime: zod.string().nullish(),
+    outcomeNotes: zod.string().nullish(),
     createdAt: zod.coerce.date(),
     updatedAt: zod.coerce.date(),
   }),
@@ -476,6 +544,12 @@ export const GetDashboardStatsResponse = zod.object({
           .string()
           .nullish()
           .describe("human | machine | unknown (Twilio AMD)"),
+        outcome: zod
+          .enum(["INTERESTED", "NOT_INTERESTED", "NO_RESPONSE"])
+          .nullish(),
+        followUpDate: zod.coerce.date().nullish(),
+        followUpTime: zod.string().nullish(),
+        outcomeNotes: zod.string().nullish(),
         createdAt: zod.coerce.date(),
         updatedAt: zod.coerce.date(),
       }),

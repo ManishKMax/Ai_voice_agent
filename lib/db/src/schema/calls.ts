@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, date } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -14,6 +14,13 @@ export const callStatusEnum = [
 
 export type CallStatus = (typeof callStatusEnum)[number];
 
+export const callOutcomeEnum = [
+  "INTERESTED",
+  "NOT_INTERESTED",
+  "NO_RESPONSE",
+] as const;
+export type CallOutcome = (typeof callOutcomeEnum)[number];
+
 export const callsTable = pgTable("calls", {
   id: serial("id").primaryKey(),
   leadId: integer("lead_id").notNull(),
@@ -24,6 +31,10 @@ export const callsTable = pgTable("calls", {
   transcript: text("transcript"),
   interestScore: integer("interest_score"),
   answeredBy: text("answered_by"),
+  outcome: text("outcome").$type<CallOutcome>(),
+  followUpDate: date("follow_up_date"),
+  followUpTime: text("follow_up_time"),
+  outcomeNotes: text("outcome_notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

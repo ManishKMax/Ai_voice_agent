@@ -26,6 +26,7 @@ export const tenantsTable = pgTable("tenants", {
   exotelApiToken: text("exotel_api_token"),
   exotelPhoneNumber: text("exotel_phone_number"),
   minutesBalance: integer("minutes_balance").default(0).notNull(),
+  sarvamEnabled: boolean("sarvam_enabled").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -38,6 +39,7 @@ export const insertTenantSchema = createInsertSchema(tenantsTable).omit({
   trialCallsUsed: true,
   isActive: true,
   minutesBalance: true,
+  sarvamEnabled: true,
 });
 
 export type InsertTenant = z.infer<typeof insertTenantSchema>;

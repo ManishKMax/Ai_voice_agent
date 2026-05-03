@@ -8,3 +8,6 @@ export * from "./api_keys";
 export * from "./tenants";
 export * from "./pricing_config";
 export * from "./kyc_documents";
+export * from "./subscriptions";
+export * from "./magic_link_tokens";
+export * from "./audit_logs";

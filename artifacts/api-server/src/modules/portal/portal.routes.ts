@@ -100,11 +100,12 @@ router.get("/usage", requireClerkAuth, async (req: any, res, next) => {
  * Returns a presigned URL for direct-to-GCS upload of a KYC document.
  * Step 1 of the 2-step presigned upload flow.
  */
-router.post("/kyc/upload-url", requireClerkAuth, async (req: any, res, next) => {
+router.post("/kyc/upload-url", requireClerkAuth, async (req: any, res, next): Promise<void> => {
   try {
     const { name, size, contentType } = req.body;
     if (!name || !size || !contentType) {
-      return res.status(400).json({ error: "name, size, contentType are required" });
+      res.status(400).json({ error: "name, size, contentType are required" });
+      return;
     }
 
     const uploadURL = await objectStorageService.getObjectEntityUploadURL();
@@ -121,7 +122,7 @@ router.post("/kyc/upload-url", requireClerkAuth, async (req: any, res, next) => 
  * After the client uploads directly to GCS, call this to record the document in the DB
  * and update the tenant's KYC status to "submitted".
  */
-router.post("/kyc/submit", requireClerkAuth, async (req: any, res, next) => {
+router.post("/kyc/submit", requireClerkAuth, async (req: any, res, next): Promise<void> => {
   try {
     const { clerkUserId } = req;
     const { documents } = req.body as {
@@ -133,7 +134,8 @@ router.post("/kyc/submit", requireClerkAuth, async (req: any, res, next) => {
     };
 
     if (!documents || !Array.isArray(documents) || documents.length === 0) {
-      return res.status(400).json({ error: "documents array is required" });
+      res.status(400).json({ error: "documents array is required" });
+      return;
     }
 
     const tenant = await getOrCreateTenant(clerkUserId, "User", "");

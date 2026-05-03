@@ -18,6 +18,11 @@ export interface StoredPlatformSettings {
   smtpUser?: string;
   smtpPass?: string;
   smtpFrom?: string;
+  sarvamEnabled?: boolean;
+  sarvamMaxUsers?: number;
+  razorpayKeyId?: string;
+  razorpayKeySecret?: string;
+  razorpayWebhookSecret?: string;
 }
 
 export const platformSettingsTable = pgTable("platform_settings", {

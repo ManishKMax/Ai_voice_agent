@@ -83,7 +83,7 @@ export default function UsersPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
 
-  const [tab, setTab] = useState<"all" | "portal" | "admin">("all");
+  const [tab, setTab] = useState<"all" | "portal">("all");
   const [createOpen, setCreateOpen] = useState(false);
   const [editRoleUser, setEditRoleUser] = useState<UnifiedUser | null>(null);
   const [resetPassUser, setResetPassUser] = useState<UnifiedUser | null>(null);
@@ -131,8 +131,6 @@ export default function UsersPage() {
   const allUsers: UnifiedUser[] =
     tab === "portal"
       ? portalUsers
-      : tab === "admin"
-      ? dashboardUsers
       : [...portalUsers, ...dashboardUsers].sort(
           (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         );
@@ -238,10 +236,6 @@ export default function UsersPage() {
             <Smartphone className="h-3.5 w-3.5 mr-1.5" />
             Voice Agent ({portalUsers.length})
           </TabsTrigger>
-          <TabsTrigger value="admin">
-            <Shield className="h-3.5 w-3.5 mr-1.5" />
-            Admin ({dashboardUsers.length})
-          </TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -303,16 +297,6 @@ export default function UsersPage() {
                 </TableCell>
                 <TableCell className="text-right">
                   <div className="flex items-center justify-end gap-1">
-                    {u.source === "admin" && (
-                      <>
-                        <Button size="sm" variant="ghost" title="Edit role" onClick={() => { setEditRoleUser(u); setNewRole(u.role); }}>
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button size="sm" variant="ghost" title="Reset password" onClick={() => setResetPassUser(u)}>
-                          <KeyRound className="h-3.5 w-3.5" />
-                        </Button>
-                      </>
-                    )}
                     {u.source === "portal" && (
                       <Button
                         size="sm"
@@ -421,46 +405,6 @@ export default function UsersPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Role Dialog (admin users only) */}
-      <Dialog open={!!editRoleUser} onOpenChange={(o) => !o && setEditRoleUser(null)}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Change Role — {editRoleUser?.name}</DialogTitle></DialogHeader>
-          <div className="py-2 space-y-1">
-            <label className="text-sm font-medium">New Role</label>
-            <Select value={newRole} onValueChange={setNewRole}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="USER">USER</SelectItem>
-                <SelectItem value="COMPANY_ADMIN">COMPANY_ADMIN</SelectItem>
-                <SelectItem value="SUPER_ADMIN">SUPER_ADMIN</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditRoleUser(null)}>Cancel</Button>
-            <Button onClick={() => roleMutation.mutate({ id: editRoleUser!.id, role: newRole })} disabled={roleMutation.isPending}>
-              Save
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Reset Password Dialog (admin users only) */}
-      <Dialog open={!!resetPassUser} onOpenChange={(o) => !o && setResetPassUser(null)}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Reset Password — {resetPassUser?.name}</DialogTitle></DialogHeader>
-          <div className="py-2 space-y-1">
-            <label className="text-sm font-medium">New Password</label>
-            <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Min 6 characters" />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setResetPassUser(null)}>Cancel</Button>
-            <Button onClick={() => resetPassMutation.mutate({ id: resetPassUser!.id, password: newPassword })} disabled={resetPassMutation.isPending}>
-              Reset
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

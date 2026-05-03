@@ -3,8 +3,23 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import {
   PhoneCall, Clock, ShieldCheck, AlertTriangle,
-  CheckCircle, Upload, Settings, LogOut, Zap, BarChart3
+  CheckCircle, Upload, Settings, LogOut, Zap, BarChart3,
+  CreditCard, TrendingDown,
 } from "lucide-react";
+
+function minuteLevel(min: number): "empty" | "critical" | "low" | "ok" {
+  if (min === 0) return "empty";
+  if (min < 15) return "critical";
+  if (min < 60) return "low";
+  return "ok";
+}
+
+const levelStyles = {
+  empty:    { bar: "bg-red-500",    card: "border-red-200 bg-red-50",    text: "text-red-700",    label: "Out of minutes" },
+  critical: { bar: "bg-red-400",    card: "border-red-100 bg-red-50/60", text: "text-red-600",    label: "Critically low" },
+  low:      { bar: "bg-amber-400",  card: "border-amber-100 bg-amber-50/40", text: "text-amber-600", label: "Low balance" },
+  ok:       { bar: "bg-indigo-500", card: "border-gray-100 bg-white",    text: "text-gray-900",   label: "" },
+};
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -81,7 +96,7 @@ export default function Dashboard() {
 
         {/* KYC Banner */}
         {tenant && tenant.kycStatus !== "approved" && (
-          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-6 flex items-start gap-3">
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-4 flex items-start gap-3">
             <AlertTriangle className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />
             <div className="flex-1">
               <p className="font-semibold text-amber-800">
@@ -109,6 +124,45 @@ export default function Dashboard() {
             )}
           </div>
         )}
+
+        {/* Low-balance warning (approved tenants only) */}
+        {tenant && tenant.kycStatus === "approved" && (() => {
+          const level = minuteLevel(tenant.minutesBalance);
+          if (level === "ok") return null;
+          const isEmpty = level === "empty";
+          const isCritical = level === "critical";
+          return (
+            <div className={`rounded-2xl p-4 mb-4 flex items-start gap-3 border ${
+              isEmpty || isCritical ? "bg-red-50 border-red-200" : "bg-amber-50 border-amber-200"
+            }`}>
+              {isEmpty || isCritical
+                ? <TrendingDown className={`h-5 w-5 flex-shrink-0 mt-0.5 ${isEmpty ? "text-red-600" : "text-red-400"}`} />
+                : <AlertTriangle className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />}
+              <div className="flex-1">
+                <p className={`font-semibold ${isEmpty ? "text-red-800" : isCritical ? "text-red-700" : "text-amber-800"}`}>
+                  {isEmpty
+                    ? "No calling minutes remaining — campaigns are paused"
+                    : isCritical
+                    ? `Only ${tenant.minutesBalance} minute${tenant.minutesBalance !== 1 ? "s" : ""} left — calls may stop soon`
+                    : `Balance running low — ${tenant.minutesBalance} minutes remaining`}
+                </p>
+                <p className={`text-sm mt-0.5 ${isEmpty ? "text-red-600" : isCritical ? "text-red-500" : "text-amber-600"}`}>
+                  Contact your administrator to add minutes, or visit Billing to top up.
+                </p>
+              </div>
+              <Link
+                to="/billing"
+                className={`text-sm font-semibold px-3 py-1.5 rounded-lg transition-colors flex-shrink-0 border ${
+                  isEmpty || isCritical
+                    ? "text-red-700 border-red-300 bg-red-100 hover:bg-red-200"
+                    : "text-amber-700 border-amber-300 bg-amber-100 hover:bg-amber-200"
+                }`}
+              >
+                View Billing
+              </Link>
+            </div>
+          );
+        })()}
 
         {isLoading && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
@@ -142,14 +196,27 @@ export default function Dashboard() {
                 <div className="text-xs text-gray-400 mt-1">trial calls</div>
               </div>
 
-              <div className="bg-white rounded-2xl border border-gray-100 p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-sm font-medium text-gray-500">Minutes Balance</span>
-                  <Clock className="h-4 w-4 text-purple-400" />
-                </div>
-                <div className="text-2xl font-bold text-gray-900">{tenant.minutesBalance}</div>
-                <div className="text-xs text-gray-400 mt-1">minutes remaining</div>
-              </div>
+              {(() => {
+                const level = minuteLevel(tenant.minutesBalance);
+                const s = levelStyles[level];
+                const pct = Math.min(100, (tenant.minutesBalance / 300) * 100);
+                return (
+                  <Link to="/billing" className={`rounded-2xl border p-5 block hover:shadow-sm transition-shadow ${s.card}`}>
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-sm font-medium text-gray-500">Minutes Balance</span>
+                      <Clock className={`h-4 w-4 ${level === "ok" ? "text-purple-400" : level === "low" ? "text-amber-400" : "text-red-400"}`} />
+                    </div>
+                    <div className={`text-2xl font-bold ${s.text}`}>{tenant.minutesBalance}</div>
+                    <div className="mt-2 bg-gray-200 rounded-full h-1.5">
+                      <div className={`${s.bar} rounded-full h-1.5 transition-all`} style={{ width: `${pct}%` }} />
+                    </div>
+                    <div className="flex items-center justify-between mt-1">
+                      <div className="text-xs text-gray-400">minutes remaining</div>
+                      {s.label && <div className={`text-xs font-medium ${s.text}`}>{s.label}</div>}
+                    </div>
+                  </Link>
+                );
+              })()}
 
               <div className="bg-white rounded-2xl border border-gray-100 p-5">
                 <div className="flex items-center justify-between mb-3">

@@ -4,6 +4,7 @@ import {
   listTenantsWithKyc,
   getTenantWithKyc,
   updateTenantKyc,
+  adjustMinutes,
 } from "./admin.service.js";
 
 const router = Router();
@@ -43,6 +44,23 @@ router.patch("/tenants/:id/kyc", async (req, res, next) => {
 
     const tenant = await updateTenantKyc(id, { kycStatus, adminNotes });
     res.json({ tenant });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/tenants/:id/minutes", async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid tenant ID" });
+
+    const delta = Number(req.body.delta);
+    if (!Number.isFinite(delta) || delta === 0) {
+      return res.status(400).json({ error: "delta must be a non-zero number" });
+    }
+
+    const minutesBalance = await adjustMinutes(id, Math.round(delta));
+    res.json({ minutesBalance });
   } catch (err) {
     next(err);
   }

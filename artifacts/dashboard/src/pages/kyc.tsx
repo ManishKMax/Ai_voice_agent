@@ -14,6 +14,9 @@ import {
   Clock,
   User,
   Search,
+  Plus,
+  Minus,
+  Zap,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -80,6 +83,9 @@ function ReviewModal({
 }) {
   const [notes, setNotes] = useState(tenant.documents[0]?.adminNotes ?? "");
   const [decision, setDecision] = useState<"approved" | "rejected" | null>(null);
+  const [localBalance, setLocalBalance] = useState(tenant.minutesBalance);
+  const [topUpAmount, setTopUpAmount] = useState("");
+  const [topUpMode, setTopUpMode] = useState<"credit" | "debit">("credit");
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -101,6 +107,37 @@ function ReviewModal({
       toast({ title: "Error", description: "Could not update KYC status.", variant: "destructive" });
     },
   });
+
+  const topUpMutation = useMutation({
+    mutationFn: (delta: number) =>
+      apiFetch(`/api/admin/tenants/${tenant.id}/minutes`, {
+        method: "PATCH",
+        body: JSON.stringify({ delta }),
+      }),
+    onSuccess: (data: { minutesBalance: number }, delta) => {
+      setLocalBalance(data.minutesBalance);
+      setTopUpAmount("");
+      queryClient.invalidateQueries({ queryKey: ["admin-tenants"] });
+      toast({
+        title: delta > 0 ? `+${delta} minutes credited` : `${Math.abs(delta)} minutes debited`,
+        description: `New balance: ${data.minutesBalance} min`,
+      });
+    },
+    onError: () => {
+      toast({ title: "Failed", description: "Could not update balance.", variant: "destructive" });
+    },
+  });
+
+  function applyTopUp(amount: number) {
+    const delta = topUpMode === "credit" ? amount : -amount;
+    topUpMutation.mutate(delta);
+  }
+
+  function handleCustomTopUp() {
+    const n = parseInt(topUpAmount, 10);
+    if (!n || n <= 0) return;
+    applyTopUp(n);
+  }
 
   function submit(status: "approved" | "rejected") {
     setDecision(status);
@@ -132,7 +169,7 @@ function ReviewModal({
             {[
               { label: "Account type", value: tenant.type },
               { label: "Trial calls used", value: `${tenant.trialCallsUsed}` },
-              { label: "Minutes balance", value: `${tenant.minutesBalance} min` },
+              { label: "Minutes balance", value: `${localBalance} min` },
             ].map((s) => (
               <div key={s.label} className="bg-muted rounded-lg px-3 py-2">
                 <p className="text-xs text-muted-foreground">{s.label}</p>
@@ -238,6 +275,87 @@ function ReviewModal({
               </button>
             </div>
           )}
+
+          {/* ── Minutes top-up ── */}
+          <div className="mt-6 pt-5 border-t border-border">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Zap className="h-4 w-4 text-amber-500" />
+                <h3 className="text-sm font-semibold text-foreground">Minutes Balance</h3>
+              </div>
+              <span className="text-lg font-bold text-foreground tabular-nums">
+                {localBalance}
+                <span className="text-xs font-normal text-muted-foreground ml-1">min</span>
+              </span>
+            </div>
+
+            {/* Credit / Debit toggle */}
+            <div className="flex rounded-lg overflow-hidden border border-border mb-3 text-sm font-medium">
+              <button
+                onClick={() => setTopUpMode("credit")}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 transition-colors ${
+                  topUpMode === "credit"
+                    ? "bg-green-600 text-white"
+                    : "bg-card text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                <Plus className="h-3.5 w-3.5" /> Credit
+              </button>
+              <button
+                onClick={() => setTopUpMode("debit")}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 transition-colors ${
+                  topUpMode === "debit"
+                    ? "bg-red-600 text-white"
+                    : "bg-card text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                <Minus className="h-3.5 w-3.5" /> Debit
+              </button>
+            </div>
+
+            {/* Quick presets */}
+            <div className="flex gap-2 mb-3 flex-wrap">
+              {[30, 60, 120, 300].map((n) => (
+                <button
+                  key={n}
+                  onClick={() => applyTopUp(n)}
+                  disabled={topUpMutation.isPending}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors disabled:opacity-50 ${
+                    topUpMode === "credit"
+                      ? "border-green-300 text-green-700 hover:bg-green-50 dark:hover:bg-green-950"
+                      : "border-red-300 text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+                  }`}
+                >
+                  {topUpMode === "credit" ? "+" : "−"}{n} min
+                </button>
+              ))}
+            </div>
+
+            {/* Custom amount */}
+            <div className="flex gap-2">
+              <input
+                type="number"
+                min={1}
+                value={topUpAmount}
+                onChange={(e) => setTopUpAmount(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleCustomTopUp()}
+                placeholder="Custom amount…"
+                className="flex-1 rounded-xl border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 placeholder:text-muted-foreground"
+              />
+              <button
+                onClick={handleCustomTopUp}
+                disabled={topUpMutation.isPending || !topUpAmount}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold text-white transition-colors disabled:opacity-50 ${
+                  topUpMode === "credit" ? "bg-green-600 hover:bg-green-700" : "bg-red-600 hover:bg-red-700"
+                }`}
+              >
+                {topUpMutation.isPending
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : topUpMode === "credit" ? <Plus className="h-3.5 w-3.5" /> : <Minus className="h-3.5 w-3.5" />}
+                Apply
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

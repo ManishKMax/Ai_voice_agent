@@ -1,5 +1,5 @@
 import { db, tenantsTable, kycDocumentsTable } from "@workspace/db";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, sql } from "drizzle-orm";
 import { sendKycDecisionEmail } from "../../services/email.service.js";
 
 export async function listTenantsWithKyc() {
@@ -44,6 +44,19 @@ export async function getTenantWithKyc(tenantId: number) {
     .orderBy(desc(kycDocumentsTable.createdAt));
 
   return { ...rows[0], documents: docs };
+}
+
+export async function adjustMinutes(tenantId: number, delta: number) {
+  const rows = await db
+    .update(tenantsTable)
+    .set({
+      minutesBalance: sql`GREATEST(0, ${tenantsTable.minutesBalance} + ${delta})`,
+      updatedAt: new Date(),
+    })
+    .where(eq(tenantsTable.id, tenantId))
+    .returning({ minutesBalance: tenantsTable.minutesBalance });
+
+  return rows[0]?.minutesBalance ?? 0;
 }
 
 export async function updateTenantKyc(

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { getAuth } from "@clerk/express";
-import { getOrCreateTenant, getPricingConfig, submitKycDocument, getPortalUsage, getPortalUsageMonths, getPortalUsageForMonth, syncPortalUser } from "./portal.service.js";
+import { getOrCreateTenant, getPricingConfig, submitKycDocument, getPortalUsage, getPortalUsageMonths, getPortalUsageForMonth } from "./portal.service.js";
 import { ObjectStorageService } from "../../lib/objectStorage.js";
 
 const router = Router();
@@ -21,7 +21,6 @@ router.get("/me", requireClerkAuth, async (req: any, res, next) => {
     const name = (req.headers["x-clerk-user-name"] as string) || "User";
     const email = (req.headers["x-clerk-user-email"] as string) || "";
 
-    await syncPortalUser(name, email);
     const tenant = await getOrCreateTenant(clerkUserId, name, email);
     const pricing = await getPricingConfig();
 

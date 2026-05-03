@@ -1,7 +1,6 @@
-import { db, tenantsTable, pricingConfigTable, kycDocumentsTable, usersTable } from "@workspace/db";
+import { db, tenantsTable, pricingConfigTable, kycDocumentsTable } from "@workspace/db";
 import { callsTable, leadsTable } from "@workspace/db/schema";
 import { eq, sql, desc, and, gte, lt } from "drizzle-orm";
-import bcrypt from "bcryptjs";
 
 export async function getOrCreateTenant(clerkUserId: string, name: string, email: string) {
   const existing = await db
@@ -16,47 +15,6 @@ export async function getOrCreateTenant(clerkUserId: string, name: string, email
     .insert(tenantsTable)
     .values({ clerkUserId, name, email })
     .returning();
-
-  return created;
-}
-
-export async function syncPortalUser(name: string, email: string) {
-  if (!email) return null;
-
-  const existing = await db
-    .select({
-      id: usersTable.id,
-      name: usersTable.name,
-      email: usersTable.email,
-      role: usersTable.role,
-      isActive: usersTable.isActive,
-      createdAt: usersTable.createdAt,
-    })
-    .from(usersTable)
-    .where(eq(usersTable.email, email))
-    .limit(1);
-
-  if (existing.length > 0) {
-    return existing[0];
-  }
-
-  const password = await bcrypt.hash(`portal-${email}`, 10);
-  const [created] = await db
-    .insert(usersTable)
-    .values({
-      name: name || email,
-      email,
-      password,
-      role: "USER",
-    })
-    .returning({
-      id: usersTable.id,
-      name: usersTable.name,
-      email: usersTable.email,
-      role: usersTable.role,
-      isActive: usersTable.isActive,
-      createdAt: usersTable.createdAt,
-    });
 
   return created;
 }

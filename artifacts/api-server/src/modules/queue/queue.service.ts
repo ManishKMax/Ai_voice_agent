@@ -17,8 +17,19 @@ export function registerProcessor(fn: (leadId: number) => Promise<void>) {
   processFn = fn;
 }
 
+const BUSINESS_TIMEZONE = "Asia/Kolkata";
+
+function getCurrentHourInTz(): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: BUSINESS_TIMEZONE,
+    hour: "numeric",
+    hour12: false,
+  }).formatToParts(new Date());
+  return parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10);
+}
+
 function isWithinBusinessHours(): boolean {
-  const hour = new Date().getHours();
+  const hour = getCurrentHourInTz();
   return hour >= platformSettings.callHoursStart && hour < platformSettings.callHoursEnd;
 }
 
@@ -26,17 +37,38 @@ function msUntilNextBusinessWindow(): number {
   const now = new Date();
   const start = platformSettings.callHoursStart;
 
-  const todayOpen = new Date(now);
-  todayOpen.setHours(start, 0, 0, 0);
+  // Get current date components in IST
+  const tzParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: BUSINESS_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
 
-  if (now < todayOpen) {
-    return todayOpen.getTime() - now.getTime();
+  const get = (type: string) =>
+    parseInt(tzParts.find((p) => p.type === type)?.value ?? "0", 10);
+
+  const year = get("year");
+  const month = get("month") - 1;
+  const day = get("day");
+  const currentHour = get("hour");
+
+  // Build opening time today in IST, convert to UTC ms
+  const todayOpenIST = new Date(
+    Date.UTC(year, month, day, start, 0, 0, 0) - (5 * 60 + 30) * 60 * 1000,
+  );
+
+  if (now < todayOpenIST) {
+    return todayOpenIST.getTime() - now.getTime();
   }
 
-  const tomorrowOpen = new Date(now);
-  tomorrowOpen.setDate(tomorrowOpen.getDate() + 1);
-  tomorrowOpen.setHours(start, 0, 0, 0);
-  return tomorrowOpen.getTime() - now.getTime();
+  // Already past opening today — open tomorrow
+  const tomorrowOpenIST = new Date(todayOpenIST.getTime() + 24 * 60 * 60 * 1000);
+  return tomorrowOpenIST.getTime() - now.getTime();
 }
 
 /**

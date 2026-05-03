@@ -9,10 +9,21 @@ import { useCallStatusSSE } from "@/hooks/useCallStatusSSE";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
+async function parseJsonOrThrow(res: Response) {
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    const text = await res.text();
+    throw new Error(text.includes("<html") || text.includes("<!DOCTYPE")
+      ? "Your session expired. Please sign in again."
+      : text || "Unexpected response from server");
+  }
+  return res.json();
+}
+
 async function fetchPortalMe() {
   const res = await fetch(`${basePath}/api/portal/me`, { credentials: "include" });
-  if (!res.ok) throw new Error("Failed to fetch");
-  return res.json();
+  if (!res.ok) throw new Error(res.status === 401 || res.status === 403 ? "Your session expired. Please sign in again." : "Failed to fetch");
+  return parseJsonOrThrow(res);
 }
 
 function minuteLevel(min: number): "empty" | "critical" | "low" | "ok" {
@@ -29,7 +40,8 @@ export default function Billing() {
   const { data, isLoading } = useQuery({
     queryKey: ["portal-me"],
     queryFn: fetchPortalMe,
-    retry: 1,
+    retry: false,
+    staleTime: 10_000,
   });
 
   useCallStatusSSE((type) => {
@@ -65,12 +77,10 @@ export default function Billing() {
           <h1 className="text-xl font-bold text-gray-900">Billing & Plans</h1>
         </div>
 
-        {/* Live balance widget */}
         {isLoading ? (
           <div className="bg-white border border-gray-100 rounded-2xl p-6 animate-pulse h-28" />
         ) : tenant ? (
           <>
-            {/* Low / empty balance alert */}
             {isApproved && (level === "empty" || level === "critical" || level === "low") && (
               <div className={`rounded-2xl p-4 flex items-start gap-3 border ${
                 level === "empty"    ? "bg-red-50 border-red-200" :
@@ -104,7 +114,6 @@ export default function Billing() {
               </div>
             )}
 
-            {/* Balance card */}
             <div className={`rounded-2xl border p-6 ${
               level === "ok" ? "bg-gradient-to-br from-indigo-600 to-indigo-700 text-white border-indigo-600" :
               level === "low" ? "bg-gradient-to-br from-amber-500 to-amber-600 text-white border-amber-500" :
@@ -123,7 +132,6 @@ export default function Billing() {
                 </div>
               </div>
 
-              {/* Balance bar */}
               <div className="bg-white/20 rounded-full h-2 mb-3">
                 <div
                   className="bg-white rounded-full h-2 transition-all duration-500"
@@ -145,70 +153,6 @@ export default function Billing() {
           </>
         ) : null}
 
-        {/* Current plan */}
-        <div className="bg-white border border-gray-100 rounded-2xl p-6">
-          <div className="flex items-start justify-between mb-4">
-            <div>
-              <p className="text-gray-500 text-sm font-medium">Current Plan</p>
-              <h2 className="text-2xl font-bold text-gray-900 mt-1">
-                {isApproved ? "Pro" : "Trial"}
-              </h2>
-            </div>
-            <div className="bg-indigo-50 text-indigo-700 rounded-xl px-3 py-1.5 text-sm font-semibold">
-              {isApproved ? "Active" : "Free"}
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-4 text-sm text-gray-500">
-            <span className="flex items-center gap-1.5">
-              <Clock className="h-3.5 w-3.5" />
-              {isApproved ? `${pricing?.monthlyMinutesQuota ?? 400} minutes/month included` : "5 trial calls included"}
-            </span>
-            <span className="flex items-center gap-1.5">
-              <ShieldCheck className="h-3.5 w-3.5" />
-              {isApproved ? "KYC verified" : "KYC required to upgrade"}
-            </span>
-          </div>
-        </div>
-
-        {/* Upgrade plan — only shown in trial */}
-        {!isApproved && (
-          <div className="bg-white border border-gray-100 rounded-2xl p-6">
-            <div className="flex items-start justify-between mb-5">
-              <div>
-                <h3 className="font-bold text-gray-900 text-lg">Pro Plan</h3>
-                <p className="text-gray-500 text-sm mt-0.5">Everything you need to scale your calling</p>
-              </div>
-              <div className="text-right">
-                <span className="text-3xl font-bold text-gray-900">₹{pricing?.monthlyPlanCostRupees ?? 2000}</span>
-                <span className="text-gray-500 text-sm">/month</span>
-              </div>
-            </div>
-            <ul className="space-y-2.5 mb-6">
-              {[
-                `${pricing?.monthlyMinutesQuota ?? 400} minutes/month included`,
-                `₹${rateRupees} per additional minute`,
-                "Hindi + English AI voice",
-                "Full call transcripts & AI analysis",
-                "Smart retry scheduling",
-                "Priority support",
-              ].map((f) => (
-                <li key={f} className="flex items-center gap-2 text-sm text-gray-700">
-                  <Zap className="h-3.5 w-3.5 text-indigo-500 flex-shrink-0" />
-                  {f}
-                </li>
-              ))}
-            </ul>
-            <button className="w-full bg-indigo-600 text-white py-3 rounded-xl font-semibold hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2">
-              <CreditCard className="h-4 w-4" />
-              Subscribe via Razorpay
-            </button>
-            <p className="text-center text-xs text-gray-400 mt-3">
-              <Link to="/kyc" className="underline hover:text-gray-600">Complete KYC</Link> first to activate your plan.
-            </p>
-          </div>
-        )}
-
-        {/* Top-up */}
         <div className="bg-white border border-gray-100 rounded-2xl p-6">
           <h3 className="font-semibold text-gray-900 mb-1">Buy Additional Minutes</h3>
           <p className="text-sm text-gray-500 mb-4">

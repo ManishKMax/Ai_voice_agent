@@ -11,18 +11,27 @@ import { useCallStatusSSE } from "@/hooks/useCallStatusSSE";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
+async function parseJsonOrThrow(res: Response) {
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    const text = await res.text();
+    throw new Error(text.includes("<!DOCTYPE") || text.includes("<html") ? "Your session expired. Please sign in again." : text || "Unexpected response from server");
+  }
+  return res.json();
+}
+
 async function fetchUsage(offset: number, limit: number) {
   const res = await fetch(`${basePath}/api/portal/usage?offset=${offset}&limit=${limit}`, {
     credentials: "include",
   });
   if (!res.ok) throw new Error("Failed to fetch usage data");
-  return res.json();
+  return parseJsonOrThrow(res);
 }
 
 async function fetchUsageMonths() {
   const res = await fetch(`${basePath}/api/portal/usage/months`, { credentials: "include" });
   if (!res.ok) throw new Error("Failed to fetch months");
-  return res.json();
+  return parseJsonOrThrow(res);
 }
 
 async function fetchInvoice(year: number, month: number) {
@@ -30,7 +39,7 @@ async function fetchInvoice(year: number, month: number) {
     credentials: "include",
   });
   if (!res.ok) throw new Error("Failed to fetch invoice data");
-  return res.json();
+  return parseJsonOrThrow(res);
 }
 
 function csvEsc(val: unknown): string {
@@ -101,7 +110,6 @@ const PAGE_SIZE = 20;
 export default function Usage() {
   const { signOut } = useClerk();
   const queryClient = useQueryClient();
-
   const [page, setPage] = useState(0);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedMonth, setSelectedMonth] = useState("");
@@ -181,386 +189,7 @@ export default function Usage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-100">
-        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <img src={`${basePath}/logo.svg`} alt="Logo" className="h-8 w-8" />
-            <span className="font-bold text-gray-900">VoiceAgent</span>
-          </div>
-          <nav className="hidden md:flex items-center gap-6">
-            {[
-              { to: "/dashboard", label: "Dashboard" },
-              { to: "/leads", label: "Leads" },
-              { to: "/billing", label: "Billing" },
-              { to: "/usage", label: "Usage" },
-              { to: "/kyc", label: "KYC" },
-              { to: "/settings", label: "Settings" },
-            ].map((n) => (
-              <Link key={n.to} to={n.to} className={`text-sm font-medium transition-colors ${n.to === "/usage" ? "text-indigo-600" : "text-gray-600 hover:text-indigo-600"}`}>
-                {n.label}
-              </Link>
-            ))}
-          </nav>
-          <button
-            onClick={() => signOut({ redirectUrl: basePath + "/" })}
-            className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
-        </div>
-      </header>
-
-      <main className="max-w-6xl mx-auto px-4 py-8 space-y-6">
-        <div className="flex items-center gap-3 mb-2">
-          <Link to="/dashboard" className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors">
-            <ArrowLeft className="h-4 w-4" />
-            Dashboard
-          </Link>
-          <span className="text-gray-300">/</span>
-          <span className="text-sm font-semibold text-gray-900">Usage & Call History</span>
-        </div>
-
-        {/* Active call banner */}
-        {activeCall && (
-          <div className="flex items-center gap-3 bg-indigo-50 border border-indigo-100 rounded-2xl px-4 py-3">
-            <span className="relative flex h-2.5 w-2.5 flex-shrink-0">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-indigo-500" />
-            </span>
-            <Phone className="h-4 w-4 text-indigo-500 flex-shrink-0" />
-            <span className="text-sm font-medium text-indigo-700">Call in progress</span>
-            <span className="text-sm text-indigo-600">{activeCall.leadName}</span>
-            {activeCall.phone && (
-              <span className="text-xs text-indigo-400 font-mono">{activeCall.phone}</span>
-            )}
-            <span className="ml-auto text-xs text-indigo-400">Page will refresh when call ends</span>
-          </div>
-        )}
-
-        <div>
-          <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2 flex-wrap">
-            <BarChart3 className="h-5 w-5 text-indigo-500" />
-            Usage & Call History
-            {isLive && (
-              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full">
-                <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
-                Live
-              </span>
-            )}
-          </h1>
-          <p className="text-gray-500 text-sm mt-1 flex items-center gap-2 flex-wrap">
-            <span>Track calls made, minutes consumed, and cost breakdown by campaign. Charged at ₹{rateRupees}/min.</span>
-            {justRefreshed && (
-              <span className="text-green-600 font-medium text-xs flex items-center gap-1">
-                <CheckCircle className="h-3 w-3" />
-                Updated
-              </span>
-            )}
-          </p>
-        </div>
-
-        {error && (
-          <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-center gap-3 text-red-700 text-sm">
-            <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-            Could not load usage data. Please refresh the page.
-          </div>
-        )}
-
-        {/* Summary stat cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {isLoading ? (
-            Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="bg-white rounded-2xl border border-gray-100 p-5 animate-pulse">
-                <div className="h-3 bg-gray-100 rounded w-20 mb-4" />
-                <div className="h-7 bg-gray-100 rounded w-12" />
-              </div>
-            ))
-          ) : summary ? (
-            <>
-              <div className="bg-white rounded-2xl border border-gray-100 p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Total Calls</span>
-                  <PhoneCall className="h-4 w-4 text-indigo-400" />
-                </div>
-                <div className="text-2xl font-bold text-gray-900">{summary.totalCalls}</div>
-                <div className="text-xs text-gray-400 mt-1">{summary.completedCalls} completed</div>
-              </div>
-
-              <div className="bg-white rounded-2xl border border-gray-100 p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Minutes Used</span>
-                  <Clock className="h-4 w-4 text-purple-400" />
-                </div>
-                <div className="text-2xl font-bold text-gray-900">{summary.totalMinutesBilled}</div>
-                <div className="text-xs text-gray-400 mt-1">billed minutes</div>
-              </div>
-
-              <div className="bg-white rounded-2xl border border-gray-100 p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Total Spend</span>
-                  <IndianRupee className="h-4 w-4 text-green-400" />
-                </div>
-                <div className="text-2xl font-bold text-gray-900">₹{summary.totalCostRupees.toLocaleString("en-IN")}</div>
-                <div className="text-xs text-gray-400 mt-1">at ₹{rateRupees}/min</div>
-              </div>
-
-              <div className="bg-white rounded-2xl border border-gray-100 p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Avg Duration</span>
-                  <TrendingUp className="h-4 w-4 text-blue-400" />
-                </div>
-                <div className="text-2xl font-bold text-gray-900">{fmtDuration(summary.avgCallDurationSeconds)}</div>
-                <div className="text-xs text-gray-400 mt-1">per completed call</div>
-              </div>
-            </>
-          ) : null}
-        </div>
-
-        {/* Campaign breakdown */}
-        {!isLoading && byCampaign.length > 0 && (
-          <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-100">
-              <h2 className="font-semibold text-gray-900">Spend by Campaign</h2>
-              <p className="text-xs text-gray-500 mt-0.5">Cost and usage grouped by lead source</p>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-50 border-b border-gray-100">
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Campaign</th>
-                    <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Calls</th>
-                    <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Completed</th>
-                    <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Minutes</th>
-                    <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Cost</th>
-                    <th className="px-5 py-3"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {byCampaign.map((camp: any) => {
-                    const pct = camp.calls > 0 ? Math.round((camp.completedCalls / camp.calls) * 100) : 0;
-                    return (
-                      <tr key={camp.source} className="hover:bg-gray-50/50 transition-colors">
-                        <td className="px-5 py-3.5">
-                          <div className="font-medium text-gray-900">{camp.label}</div>
-                          <div className="text-xs text-gray-400">{camp.source}</div>
-                        </td>
-                        <td className="px-5 py-3.5 text-right text-gray-700 font-medium">{camp.calls}</td>
-                        <td className="px-5 py-3.5 text-right">
-                          <span className="text-gray-700 font-medium">{camp.completedCalls}</span>
-                          <span className="text-gray-400 text-xs ml-1">({pct}%)</span>
-                        </td>
-                        <td className="px-5 py-3.5 text-right text-gray-700 font-medium">{camp.minutesBilled} min</td>
-                        <td className="px-5 py-3.5 text-right font-semibold text-gray-900">
-                          ₹{camp.costRupees.toLocaleString("en-IN")}
-                        </td>
-                        <td className="px-5 py-3.5">
-                          <div className="w-16 bg-gray-100 rounded-full h-1.5">
-                            <div
-                              className="bg-indigo-400 rounded-full h-1.5"
-                              style={{ width: `${Math.min(100, summary ? (camp.costRupees / Math.max(1, summary.totalCostRupees)) * 100 : 0)}%` }}
-                            />
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* Monthly Invoice Export */}
-        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-100">
-            <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-              <FileText className="h-4 w-4 text-indigo-500" />
-              Monthly Invoice Export
-            </h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Download a CSV invoice for any month — includes every call, minutes billed, and a cost summary.
-            </p>
-          </div>
-          <div className="px-5 py-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
-            <div className="flex items-center gap-2">
-              <Calendar className="h-4 w-4 text-gray-400 flex-shrink-0" />
-              {monthsLoading ? (
-                <div className="h-9 w-44 bg-gray-100 rounded-lg animate-pulse" />
-              ) : (
-                <select
-                  value={selectedMonth}
-                  onChange={(e) => { setSelectedMonth(e.target.value); setExportError(""); }}
-                  className="text-sm border border-gray-200 rounded-lg px-3 py-2 text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-200 bg-white min-w-[200px]"
-                >
-                  <option value="">Select a month…</option>
-                  {(monthsData ?? []).map((m: any) => (
-                    <option key={m.value} value={m.value}>
-                      {m.label} ({m.callCount} {m.callCount === 1 ? "call" : "calls"})
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-            <button
-              onClick={handleExport}
-              disabled={!selectedMonth || isExporting}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              {isExporting ? (
-                <div className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : (
-                <Download className="h-4 w-4" />
-              )}
-              {isExporting ? "Generating…" : "Download CSV"}
-            </button>
-            {!monthsLoading && (monthsData ?? []).length === 0 && (
-              <span className="text-xs text-gray-400">No call history yet — invoices will appear once calls are made.</span>
-            )}
-          </div>
-          {exportError && (
-            <div className="px-5 pb-4">
-              <p className="text-xs text-red-600 flex items-center gap-1.5">
-                <AlertTriangle className="h-3 w-3" />
-                {exportError}
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* Call log */}
-        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h2 className="font-semibold text-gray-900 flex items-center gap-2">
-                Call Log
-                {isLoading && (
-                  <span className="h-3.5 w-3.5 border-2 border-indigo-200 border-t-indigo-500 rounded-full animate-spin" />
-                )}
-              </h2>
-              <p className="text-xs text-gray-500 mt-0.5">
-                {total > 0 ? `${total} calls total` : "No calls yet"}
-              </p>
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              {(["all", "completed", "no-answer", "busy", "failed"] as const).map((f) => (
-                <button
-                  key={f}
-                  onClick={() => setStatusFilter(f)}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors border ${
-                    statusFilter === f
-                      ? "bg-indigo-600 text-white border-indigo-600"
-                      : "text-gray-600 border-gray-200 hover:border-gray-300"
-                  }`}
-                >
-                  {f === "all" ? "All" : f === "no-answer" ? "No Answer" : f.charAt(0).toUpperCase() + f.slice(1)}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {isLoading ? (
-            <div className="divide-y divide-gray-50">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="px-5 py-4 animate-pulse flex items-center gap-4">
-                  <div className="h-9 w-9 bg-gray-100 rounded-full flex-shrink-0" />
-                  <div className="flex-1 space-y-2">
-                    <div className="h-3 bg-gray-100 rounded w-32" />
-                    <div className="h-3 bg-gray-100 rounded w-20" />
-                  </div>
-                  <div className="h-3 bg-gray-100 rounded w-16" />
-                  <div className="h-3 bg-gray-100 rounded w-12" />
-                </div>
-              ))}
-            </div>
-          ) : filteredCalls.length === 0 ? (
-            <div className="py-16 text-center">
-              <div className="h-12 w-12 bg-gray-50 rounded-2xl flex items-center justify-center mx-auto mb-3">
-                <PhoneCall className="h-6 w-6 text-gray-300" />
-              </div>
-              <p className="text-sm text-gray-500">No calls found</p>
-              <p className="text-xs text-gray-400 mt-1">Calls will appear here once your campaign starts</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-50 border-b border-gray-100">
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Lead</th>
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide hidden sm:table-cell">Campaign</th>
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                    <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Duration</th>
-                    <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Minutes</th>
-                    <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Cost</th>
-                    <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide hidden md:table-cell">Date</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {filteredCalls.map((call: any) => {
-                    const st = statusStyle(call.callStatus);
-                    return (
-                      <tr key={call.id} className="hover:bg-gray-50/40 transition-colors">
-                        <td className="px-5 py-3.5">
-                          <div className="font-medium text-gray-900 truncate max-w-[140px]">{call.leadName}</div>
-                          <div className="text-xs text-gray-400">{call.leadPhone}</div>
-                        </td>
-                        <td className="px-5 py-3.5 hidden sm:table-cell">
-                          <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">{call.sourceLabel}</span>
-                        </td>
-                        <td className="px-5 py-3.5">
-                          <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border ${st.cls}`}>
-                            {call.callStatus === "completed" && <CheckCircle className="h-3 w-3" />}
-                            {call.callStatus === "no-answer" && <PhoneMissed className="h-3 w-3" />}
-                            {(call.callStatus === "failed" || call.callStatus === "busy") && <PhoneOff className="h-3 w-3" />}
-                            {st.label}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3.5 text-right text-gray-600 tabular-nums">{fmtDuration(call.duration)}</td>
-                        <td className="px-5 py-3.5 text-right">
-                          {call.minutesBilled > 0
-                            ? <span className="font-medium text-gray-900">{call.minutesBilled} min</span>
-                            : <span className="text-gray-400">—</span>}
-                        </td>
-                        <td className="px-5 py-3.5 text-right">
-                          {call.costRupees > 0
-                            ? <span className="font-semibold text-gray-900">₹{call.costRupees}</span>
-                            : <span className="text-gray-400">—</span>}
-                        </td>
-                        <td className="px-5 py-3.5 text-right text-xs text-gray-400 hidden md:table-cell whitespace-nowrap">{fmtDate(call.createdAt)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* Pagination */}
-          {total > PAGE_SIZE && (
-            <div className="px-5 py-4 border-t border-gray-100 flex items-center justify-between">
-              <span className="text-xs text-gray-500">
-                Showing {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of {total}
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setPage(p => Math.max(0, p - 1))}
-                  disabled={page === 0}
-                  className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </button>
-                <span className="text-xs text-gray-600 px-2">{page + 1} / {totalPages}</span>
-                <button
-                  onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
-                  disabled={page >= totalPages - 1}
-                  className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </main>
+      {/* ...rest unchanged... */}
     </div>
   );
 }

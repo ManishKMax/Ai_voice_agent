@@ -15,25 +15,29 @@ function minuteLevel(min: number): "empty" | "critical" | "low" | "ok" {
 }
 
 const levelStyles = {
-  empty:    { bar: "bg-red-500",    card: "border-red-200 bg-red-50",    text: "text-red-700",    label: "Out of minutes" },
-  critical: { bar: "bg-red-400",    card: "border-red-100 bg-red-50/60", text: "text-red-600",    label: "Critically low" },
-  low:      { bar: "bg-amber-400",  card: "border-amber-100 bg-amber-50/40", text: "text-amber-600", label: "Low balance" },
-  ok:       { bar: "bg-indigo-500", card: "border-gray-100 bg-white",    text: "text-gray-900",   label: "" },
+  empty: { bar: "bg-red-500", card: "border-red-200 bg-red-50", text: "text-red-700", label: "Out of minutes" },
+  critical: { bar: "bg-red-400", card: "border-red-100 bg-red-50/60", text: "text-red-600", label: "Critically low" },
+  low: { bar: "bg-amber-400", card: "border-amber-100 bg-amber-50/40", text: "text-amber-600", label: "Low balance" },
+  ok: { bar: "bg-indigo-500", card: "border-gray-100 bg-white", text: "text-gray-900", label: "" },
 };
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-async function fetchPortalMe() {
-  const res = await fetch(`${basePath}/api/portal/me`, {
-    credentials: "include",
-  });
-  if (!res.ok) {
-    const message = res.status === 401 || res.status === 403
-      ? "Your session expired. Please sign in again."
-      : "Failed to fetch tenant info";
-    throw new Error(message);
+async function parseJsonOrThrow(res: Response) {
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    const text = await res.text();
+    throw new Error(text.includes("<!DOCTYPE") || text.includes("<html") ? "Your session expired. Please sign in again." : text || "Unexpected response from server");
   }
   return res.json();
+}
+
+async function fetchPortalMe() {
+  const res = await fetch(`${basePath}/api/portal/me`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(res.status === 401 || res.status === 403 ? "Your session expired. Please sign in again." : "Failed to fetch tenant info");
+  }
+  return parseJsonOrThrow(res);
 }
 
 export default function Dashboard() {
@@ -81,10 +85,7 @@ export default function Dashboard() {
           </nav>
           <div className="flex items-center gap-3">
             <span className="text-sm text-gray-500">{user?.primaryEmailAddress?.emailAddress}</span>
-            <button
-              onClick={() => signOut({ redirectUrl: basePath + "/" })}
-              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors"
-            >
+            <button onClick={() => signOut({ redirectUrl: basePath + "/" })} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors">
               <LogOut className="h-4 w-4" />
             </button>
           </div>
@@ -93,9 +94,7 @@ export default function Dashboard() {
 
       <main className="max-w-6xl mx-auto px-4 py-8">
         <div className="mb-8">
-          <h1 className="text-2xl font-bold text-gray-900">
-            Welcome back, {user?.firstName || user?.username || "there"} 👋
-          </h1>
+          <h1 className="text-2xl font-bold text-gray-900">Welcome back, {user?.firstName || user?.username || "there"} 👋</h1>
           <p className="text-gray-500 mt-1">Here's your AI calling overview</p>
         </div>
 
@@ -119,12 +118,7 @@ export default function Dashboard() {
               </p>
             </div>
             {(tenant.kycStatus === "pending" || tenant.kycStatus === "rejected") && (
-              <Link
-                to="/kyc"
-                className="text-sm font-semibold text-amber-700 border border-amber-300 bg-amber-100 px-3 py-1.5 rounded-lg hover:bg-amber-200 transition-colors flex-shrink-0"
-              >
-                Verify Now
-              </Link>
+              <Link to="/kyc" className="text-sm font-semibold text-amber-700 border border-amber-300 bg-amber-100 px-3 py-1.5 rounded-lg hover:bg-amber-200 transition-colors flex-shrink-0">Verify Now</Link>
             )}
           </div>
         )}
@@ -135,9 +129,7 @@ export default function Dashboard() {
           const isEmpty = level === "empty";
           const isCritical = level === "critical";
           return (
-            <div className={`rounded-2xl p-4 mb-4 flex items-start gap-3 border ${
-              isEmpty || isCritical ? "bg-red-50 border-red-200" : "bg-amber-50 border-amber-200"
-            }`}>
+            <div className={`rounded-2xl p-4 mb-4 flex items-start gap-3 border ${isEmpty || isCritical ? "bg-red-50 border-red-200" : "bg-amber-50 border-amber-200"}`}>
               {isEmpty || isCritical
                 ? <TrendingDown className={`h-5 w-5 flex-shrink-0 mt-0.5 ${isEmpty ? "text-red-600" : "text-red-400"}`} />
                 : <AlertTriangle className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />}
@@ -153,14 +145,7 @@ export default function Dashboard() {
                   Contact your administrator to add minutes, or visit Billing to top up.
                 </p>
               </div>
-              <Link
-                to="/billing"
-                className={`text-sm font-semibold px-3 py-1.5 rounded-lg transition-colors flex-shrink-0 border ${
-                  isEmpty || isCritical
-                    ? "text-red-700 border-red-300 bg-red-100 hover:bg-red-200"
-                    : "text-amber-700 border-amber-300 bg-amber-100 hover:bg-amber-200"
-                }`}
-              >
+              <Link to="/billing" className={`text-sm font-semibold px-3 py-1.5 rounded-lg transition-colors flex-shrink-0 border ${isEmpty || isCritical ? "text-red-700 border-red-300 bg-red-100 hover:bg-red-200" : "text-amber-700 border-amber-300 bg-amber-100 hover:bg-amber-200"}`}>
                 View Billing
               </Link>
             </div>
@@ -192,9 +177,7 @@ export default function Dashboard() {
                   <span className="text-sm font-medium text-gray-500">Calls Used (Trial)</span>
                   <PhoneCall className="h-4 w-4 text-indigo-400" />
                 </div>
-                <div className="text-2xl font-bold text-gray-900">
-                  {tenant.trialCallsUsed}/{tenant.trialLimit}
-                </div>
+                <div className="text-2xl font-bold text-gray-900">{tenant.trialCallsUsed}/{tenant.trialLimit}</div>
                 <div className="text-xs text-gray-400 mt-1">trial calls</div>
               </div>
 
@@ -236,9 +219,7 @@ export default function Dashboard() {
                   <span className="text-sm font-medium text-gray-500">Per Minute Rate</span>
                   <BarChart3 className="h-4 w-4 text-blue-400" />
                 </div>
-                <div className="text-2xl font-bold text-gray-900">
-                  ₹{pricing?.perMinuteRateRupees ?? 5}
-                </div>
+                <div className="text-2xl font-bold text-gray-900">₹{pricing?.perMinuteRateRupees ?? 5}</div>
                 <div className="text-xs text-gray-400 mt-1">per minute</div>
               </div>
             </div>

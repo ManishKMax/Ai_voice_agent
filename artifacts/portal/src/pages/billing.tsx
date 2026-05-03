@@ -1,10 +1,11 @@
 import { Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useClerk } from "@clerk/react";
 import {
   ArrowLeft, CreditCard, Zap, Clock, ShieldCheck,
   AlertTriangle, TrendingDown, CheckCircle,
 } from "lucide-react";
+import { useCallStatusSSE } from "@/hooks/useCallStatusSSE";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -23,10 +24,18 @@ function minuteLevel(min: number): "empty" | "critical" | "low" | "ok" {
 
 export default function Billing() {
   const { signOut } = useClerk();
+  const queryClient = useQueryClient();
+
   const { data, isLoading } = useQuery({
     queryKey: ["portal-me"],
     queryFn: fetchPortalMe,
     retry: 1,
+  });
+
+  useCallStatusSSE((type) => {
+    if (type === "call.ended" || type === "call.status") {
+      queryClient.invalidateQueries({ queryKey: ["portal-me"] });
+    }
   });
 
   const tenant = data?.tenant;

@@ -83,7 +83,12 @@ function eventColor(event: string, data: Record<string, unknown>): string {
 }
 
 export default function Dashboard() {
-  const { data: stats, isLoading, isError } = useGetDashboardStats();
+  const { data: stats, isLoading, isError, error } = useGetDashboardStats({
+    query: {
+      retry: 0,
+      staleTime: 10_000,
+    },
+  } as any);
   const { events, connected } = useLiveEvents();
 
   if (isLoading) {
@@ -107,10 +112,18 @@ export default function Dashboard() {
   }
 
   if (isError || !stats) {
+    const isAuthIssue = String((error as Error | undefined)?.message ?? "").toLowerCase().includes("401") ||
+      String((error as Error | undefined)?.message ?? "").toLowerCase().includes("unauthor");
+
     return (
-      <div className="p-8 text-center">
+      <div className="p-8 text-center space-y-3">
         <h2 className="text-xl font-semibold text-destructive">Failed to load dashboard stats</h2>
-        <p className="text-muted-foreground mt-2">Please try again later.</p>
+        <p className="text-muted-foreground">
+          {isAuthIssue
+            ? "Your session expired. Please sign in again."
+            : "Please try again later."}
+        </p>
+        {isAuthIssue && <Link href="/login" className="text-sm text-primary underline">Go to login</Link>}
       </div>
     );
   }
@@ -339,7 +352,7 @@ export default function Dashboard() {
                   return (
                     <div key={status} className="space-y-1">
                       <div className="flex justify-between text-xs">
-                        <span className="capitalize text-muted-foreground">{status.replace("_", " ")}</span>
+                        <span className="capitalize text-muted-foreground">status.replace("_", " ")</span>
                         <span className="font-medium">{count as number}</span>
                       </div>
                       <div className="h-1.5 bg-muted rounded-full overflow-hidden">

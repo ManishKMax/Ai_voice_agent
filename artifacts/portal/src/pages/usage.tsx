@@ -1,12 +1,13 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useRef } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { useClerk } from "@clerk/react";
 import {
   ArrowLeft, PhoneCall, Clock, IndianRupee, BarChart3,
   CheckCircle, PhoneMissed, PhoneOff, LogOut, AlertTriangle,
-  TrendingUp, ChevronLeft, ChevronRight, Download, Calendar, FileText,
+  TrendingUp, ChevronLeft, ChevronRight, Download, Calendar, FileText, Phone,
 } from "lucide-react";
+import { useCallStatusSSE } from "@/hooks/useCallStatusSSE";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -99,11 +100,35 @@ const PAGE_SIZE = 20;
 
 export default function Usage() {
   const { signOut } = useClerk();
+  const queryClient = useQueryClient();
+
   const [page, setPage] = useState(0);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedMonth, setSelectedMonth] = useState("");
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState("");
+
+  const [isLive, setIsLive] = useState(false);
+  const [activeCall, setActiveCall] = useState<{ leadName: string; phone: string } | null>(null);
+  const [justRefreshed, setJustRefreshed] = useState(false);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useCallStatusSSE(
+    (type, data: any) => {
+      if (type === "call.started") {
+        setActiveCall({ leadName: data.leadName ?? "Unknown", phone: data.phone ?? "" });
+      } else if (type === "call.ended" || type === "call.status") {
+        setActiveCall(null);
+        queryClient.invalidateQueries({ queryKey: ["portal-usage"] });
+        queryClient.invalidateQueries({ queryKey: ["portal-usage-months"] });
+        setJustRefreshed(true);
+        if (flashTimer.current) clearTimeout(flashTimer.current);
+        flashTimer.current = setTimeout(() => setJustRefreshed(false), 3500);
+      }
+    },
+    () => setIsLive(true),
+    () => setIsLive(false),
+  );
 
   const offset = page * PAGE_SIZE;
   const { data, isLoading, error } = useQuery({
@@ -195,13 +220,42 @@ export default function Usage() {
           <span className="text-sm font-semibold text-gray-900">Usage & Call History</span>
         </div>
 
+        {/* Active call banner */}
+        {activeCall && (
+          <div className="flex items-center gap-3 bg-indigo-50 border border-indigo-100 rounded-2xl px-4 py-3">
+            <span className="relative flex h-2.5 w-2.5 flex-shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-indigo-500" />
+            </span>
+            <Phone className="h-4 w-4 text-indigo-500 flex-shrink-0" />
+            <span className="text-sm font-medium text-indigo-700">Call in progress</span>
+            <span className="text-sm text-indigo-600">{activeCall.leadName}</span>
+            {activeCall.phone && (
+              <span className="text-xs text-indigo-400 font-mono">{activeCall.phone}</span>
+            )}
+            <span className="ml-auto text-xs text-indigo-400">Page will refresh when call ends</span>
+          </div>
+        )}
+
         <div>
-          <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+          <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2 flex-wrap">
             <BarChart3 className="h-5 w-5 text-indigo-500" />
             Usage & Call History
+            {isLive && (
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full">
+                <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
+                Live
+              </span>
+            )}
           </h1>
-          <p className="text-gray-500 text-sm mt-1">
-            Track calls made, minutes consumed, and cost breakdown by campaign. Charged at ₹{rateRupees}/min.
+          <p className="text-gray-500 text-sm mt-1 flex items-center gap-2 flex-wrap">
+            <span>Track calls made, minutes consumed, and cost breakdown by campaign. Charged at ₹{rateRupees}/min.</span>
+            {justRefreshed && (
+              <span className="text-green-600 font-medium text-xs flex items-center gap-1">
+                <CheckCircle className="h-3 w-3" />
+                Updated
+              </span>
+            )}
           </p>
         </div>
 
@@ -377,7 +431,12 @@ export default function Usage() {
         <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h2 className="font-semibold text-gray-900">Call Log</h2>
+              <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                Call Log
+                {isLoading && (
+                  <span className="h-3.5 w-3.5 border-2 border-indigo-200 border-t-indigo-500 rounded-full animate-spin" />
+                )}
+              </h2>
               <p className="text-xs text-gray-500 mt-0.5">
                 {total > 0 ? `${total} calls total` : "No calls yet"}
               </p>

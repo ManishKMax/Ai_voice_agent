@@ -62,3 +62,6 @@ channel = "stable-25_05"
 
 [userenv.shared]
 VITE_CLERK_PUBLISHABLE_KEY = "pk_test_ZGlyZWN0LWVsZi0xMC5jbGVyay5hY2NvdW50cy5kZXYk"
+
+[objectStorage]
+defaultBucketID = "replit-objstore-3cb166e9-ee5b-41c0-a57b-3c85d0428e9e"

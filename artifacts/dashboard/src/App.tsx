@@ -33,8 +33,9 @@ const queryClient = new QueryClient({
 });
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, role } = useAuth();
   if (!isAuthenticated) return <Redirect to="/login" />;
+  if (role !== "COMPANY_ADMIN" && role !== "SUPER_ADMIN") return <Redirect to="/login" />;
   return (
     <Layout>
       <Component />

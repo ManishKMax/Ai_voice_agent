@@ -726,6 +726,14 @@ components:
         transcript:
           type: string
           nullable: true
+        interestScore:
+          type: integer
+          nullable: true
+          description: AI-computed interest score 0-100
+        answeredBy:
+          type: string
+          nullable: true
+          description: "human | machine | unknown (Twilio AMD)"
         createdAt:
           type: string
           format: date-time

@@ -155,6 +155,10 @@ export interface Call {
   duration?: number | null;
   recordingUrl?: string | null;
   transcript?: string | null;
+  /** AI-computed interest score 0-100 */
+  interestScore?: number | null;
+  /** human | machine | unknown (Twilio AMD) */
+  answeredBy?: string | null;
   createdAt: string;
   updatedAt: string;
 }

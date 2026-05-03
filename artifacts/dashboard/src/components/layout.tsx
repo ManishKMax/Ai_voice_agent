@@ -8,7 +8,8 @@ import {
   LogOut,
   Activity,
   Bot,
-  Settings
+  Settings,
+  Trophy,
 } from "lucide-react";
 import { useHealthCheck } from "@workspace/api-client-react";
 
@@ -21,6 +22,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { href: "/", label: "Dashboard", icon: LayoutDashboard },
     { href: "/leads", label: "Leads", icon: Users },
     { href: "/calls", label: "Calls Log", icon: PhoneCall },
+    { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
     { href: "/agent", label: "Agent Settings", icon: Bot },
     { href: "/settings", label: "Integrations", icon: Settings },
   ];

@@ -261,6 +261,14 @@ export const GetCallsForLeadResponse = zod.object({
       duration: zod.number().nullish(),
       recordingUrl: zod.string().nullish(),
       transcript: zod.string().nullish(),
+      interestScore: zod
+        .number()
+        .nullish()
+        .describe("AI-computed interest score 0-100"),
+      answeredBy: zod
+        .string()
+        .nullish()
+        .describe("human | machine | unknown (Twilio AMD)"),
       createdAt: zod.coerce.date(),
       updatedAt: zod.coerce.date(),
     }),
@@ -311,6 +319,14 @@ export const GetCallsResponse = zod.object({
       duration: zod.number().nullish(),
       recordingUrl: zod.string().nullish(),
       transcript: zod.string().nullish(),
+      interestScore: zod
+        .number()
+        .nullish()
+        .describe("AI-computed interest score 0-100"),
+      answeredBy: zod
+        .string()
+        .nullish()
+        .describe("human | machine | unknown (Twilio AMD)"),
       createdAt: zod.coerce.date(),
       updatedAt: zod.coerce.date(),
     }),
@@ -342,6 +358,14 @@ export const GetCallByIdResponse = zod.object({
     duration: zod.number().nullish(),
     recordingUrl: zod.string().nullish(),
     transcript: zod.string().nullish(),
+    interestScore: zod
+      .number()
+      .nullish()
+      .describe("AI-computed interest score 0-100"),
+    answeredBy: zod
+      .string()
+      .nullish()
+      .describe("human | machine | unknown (Twilio AMD)"),
     createdAt: zod.coerce.date(),
     updatedAt: zod.coerce.date(),
   }),
@@ -444,6 +468,14 @@ export const GetDashboardStatsResponse = zod.object({
         duration: zod.number().nullish(),
         recordingUrl: zod.string().nullish(),
         transcript: zod.string().nullish(),
+        interestScore: zod
+          .number()
+          .nullish()
+          .describe("AI-computed interest score 0-100"),
+        answeredBy: zod
+          .string()
+          .nullish()
+          .describe("human | machine | unknown (Twilio AMD)"),
         createdAt: zod.coerce.date(),
         updatedAt: zod.coerce.date(),
       }),

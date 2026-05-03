@@ -16,6 +16,7 @@ import type { AuthRequest } from "../../middlewares/auth.js";
 const router = Router();
 
 router.use(authMiddleware);
+router.use(requireRole("SUPER_ADMIN", "COMPANY_ADMIN"));
 
 router.get("/tenants", async (_req, res, next): Promise<void> => {
   try {

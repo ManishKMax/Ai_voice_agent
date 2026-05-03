@@ -77,19 +77,13 @@ export default function UsersPage() {
   const [newRole, setNewRole] = useState("USER");
   const [newPassword, setNewPassword] = useState("");
 
-  const { data, isLoading } = useQuery({
-    queryKey: ["admin-users"],
-    queryFn: () => apiFetch("/admin/users"),
-  });
-
   const { data: tenantsData } = useQuery({
     queryKey: ["admin-tenants"],
     queryFn: () => apiFetch("/admin/tenants"),
   });
 
-  const users: any[] = data?.users ?? [];
   const tenants: any[] = tenantsData?.tenants ?? [];
-  const portalUsers = tenants.map((t: any) => ({
+  const users = tenants.map((t: any) => ({
     id: `tenant-${t.id}`,
     name: t.name,
     email: t.email,
@@ -97,29 +91,30 @@ export default function UsersPage() {
     isActive: t.isActive,
     createdAt: t.createdAt,
   }));
-  const displayUsers = [...users, ...portalUsers];
+  const isLoading = false;
+  const displayUsers = users;
 
   const createMutation = useMutation({
     mutationFn: (body: any) => apiFetch("/admin/users", { method: "POST", body: JSON.stringify(body) }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["admin-users"] }); setCreateOpen(false); setForm({ name: "", email: "", password: "", role: "USER" }); toast({ title: "User created" }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["admin-tenants"] }); setCreateOpen(false); setForm({ name: "", email: "", password: "", role: "USER" }); toast({ title: "User created" }); },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const roleMutation = useMutation({
     mutationFn: ({ id, role }: any) => apiFetch(`/admin/users/${id}/role`, { method: "PATCH", body: JSON.stringify({ role }) }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["admin-users"] }); setEditRoleUser(null); toast({ title: "Role updated" }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["admin-tenants"] }); setEditRoleUser(null); toast({ title: "Role updated" }); },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const toggleMutation = useMutation({
     mutationFn: ({ id, isActive }: any) => apiFetch(`/admin/users/${id}/active`, { method: "PATCH", body: JSON.stringify({ isActive }) }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["admin-users"] }); toast({ title: "Status updated" }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["admin-tenants"] }); toast({ title: "Status updated" }); },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => apiFetch(`/admin/users/${id}`, { method: "DELETE" }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["admin-users"] }); toast({ title: "User deleted" }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["admin-tenants"] }); toast({ title: "User deleted" }); },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
@@ -214,7 +209,7 @@ export default function UsersPage() {
                       variant="ghost"
                       title="Delete user"
                       onClick={() => {
-                        if (confirm(`Delete user ${u.name}?`)) deleteMutation.mutate(u.id);
+                        if (typeof u.id === "number" && confirm(`Delete user ${u.name}?`)) deleteMutation.mutate(u.id);
                       }}
                     >
                       <Trash2 className="h-3.5 w-3.5 text-destructive" />

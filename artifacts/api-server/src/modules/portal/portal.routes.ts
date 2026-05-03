@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { getAuth } from "@clerk/express";
-import { getOrCreateTenant, getPricingConfig, submitKycDocument, getPortalUsage } from "./portal.service.js";
+import { getOrCreateTenant, getPricingConfig, submitKycDocument, getPortalUsage, getPortalUsageMonths, getPortalUsageForMonth } from "./portal.service.js";
 import { ObjectStorageService } from "../../lib/objectStorage.js";
 
 const router = Router();
@@ -55,6 +55,30 @@ router.get("/me", requireClerkAuth, async (req: any, res, next) => {
         trialCallsLimit: pricing.trialCallsLimit,
       },
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/usage/months", requireClerkAuth, async (_req: any, res, next) => {
+  try {
+    const months = await getPortalUsageMonths();
+    res.json(months);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/usage/invoice", requireClerkAuth, async (req: any, res, next) => {
+  try {
+    const year = parseInt(req.query.year as string);
+    const month = parseInt(req.query.month as string);
+    if (!year || !month || month < 1 || month > 12) {
+      res.status(400).json({ error: "Valid year and month (1–12) are required" });
+      return;
+    }
+    const data = await getPortalUsageForMonth(year, month);
+    res.json(data);
   } catch (err) {
     next(err);
   }

@@ -5,7 +5,7 @@ import { useClerk } from "@clerk/react";
 import {
   ArrowLeft, PhoneCall, Clock, IndianRupee, BarChart3,
   CheckCircle, PhoneMissed, PhoneOff, LogOut, AlertTriangle,
-  TrendingUp, ChevronLeft, ChevronRight,
+  TrendingUp, ChevronLeft, ChevronRight, Download, Calendar, FileText,
 } from "lucide-react";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -16,6 +16,57 @@ async function fetchUsage(offset: number, limit: number) {
   });
   if (!res.ok) throw new Error("Failed to fetch usage data");
   return res.json();
+}
+
+async function fetchUsageMonths() {
+  const res = await fetch(`${basePath}/api/portal/usage/months`, { credentials: "include" });
+  if (!res.ok) throw new Error("Failed to fetch months");
+  return res.json();
+}
+
+async function fetchInvoice(year: number, month: number) {
+  const res = await fetch(`${basePath}/api/portal/usage/invoice?year=${year}&month=${month}`, {
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error("Failed to fetch invoice data");
+  return res.json();
+}
+
+function csvEsc(val: unknown): string {
+  const s = String(val ?? "");
+  return s.includes(",") || s.includes('"') || s.includes("\n")
+    ? `"${s.replace(/"/g, '""')}"`
+    : s;
+}
+
+function buildCsv(data: any): string {
+  const lines: string[] = [];
+  lines.push("VoiceAgent Monthly Invoice");
+  lines.push(`Period,${csvEsc(data.monthLabel)}`);
+  lines.push(`Generated,${new Date().toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}`);
+  lines.push(`Rate,Rs ${data.perMinuteRateRupees} per minute`);
+  lines.push("");
+  lines.push(["Call ID", "Lead Name", "Phone Number", "Campaign", "Status", "Date & Time", "Duration", "Minutes Billed", "Cost (Rs)"].map(csvEsc).join(","));
+  for (const c of data.calls) {
+    const mins = Math.floor(c.duration / 60);
+    const secs = c.duration % 60;
+    const dur = c.duration ? (mins > 0 ? `${mins}m ${secs}s` : `${secs}s`) : "0s";
+    const dt = new Date(c.createdAt).toLocaleDateString("en-IN", {
+      day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true,
+    });
+    lines.push([c.id, c.leadName, c.leadPhone, c.sourceLabel, c.callStatus, dt, dur, c.minutesBilled, c.costRupees > 0 ? c.costRupees.toFixed(2) : "0.00"].map(csvEsc).join(","));
+  }
+  lines.push("");
+  lines.push("SUMMARY");
+  lines.push(`Total Calls,${data.summary.totalCalls}`);
+  lines.push(`Completed Calls,${data.summary.completedCalls}`);
+  lines.push(`Failed / No Answer,${data.summary.totalCalls - data.summary.completedCalls}`);
+  lines.push(`Total Minutes Billed,${data.summary.totalMinutesBilled}`);
+  lines.push(`Total Cost (Rs),${data.summary.totalCostRupees.toFixed(2)}`);
+  const avg = data.summary.avgCallDurationSeconds;
+  const am = Math.floor(avg / 60), as_ = avg % 60;
+  lines.push(`Average Call Duration,${avg ? (am > 0 ? `${am}m ${as_}s` : `${as_}s`) : "0s"}`);
+  return lines.join("\n");
 }
 
 type CallStatus = "initiated" | "ringing" | "answered" | "completed" | "no-answer" | "busy" | "failed";
@@ -50,6 +101,9 @@ export default function Usage() {
   const { signOut } = useClerk();
   const [page, setPage] = useState(0);
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [selectedMonth, setSelectedMonth] = useState("");
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
 
   const offset = page * PAGE_SIZE;
   const { data, isLoading, error } = useQuery({
@@ -58,6 +112,12 @@ export default function Usage() {
     retry: 1,
     keepPreviousData: true,
   } as any);
+
+  const { data: monthsData, isLoading: monthsLoading } = useQuery({
+    queryKey: ["portal-usage-months"],
+    queryFn: fetchUsageMonths,
+    retry: 1,
+  });
 
   const summary = data?.summary;
   const byCampaign: any[] = data?.byCampaign ?? [];
@@ -69,6 +129,30 @@ export default function Usage() {
   const filteredCalls = statusFilter === "all"
     ? allCalls
     : allCalls.filter((c: any) => c.callStatus === statusFilter);
+
+  async function handleExport() {
+    if (!selectedMonth) return;
+    const [y, m] = selectedMonth.split("-").map(Number);
+    setIsExporting(true);
+    setExportError("");
+    try {
+      const invoiceData = await fetchInvoice(y, m);
+      const csv = buildCsv(invoiceData);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `voiceagent-invoice-${invoiceData.monthLabel.replace(/\s+/g, "-").toLowerCase()}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      setExportError("Could not generate invoice. Please try again.");
+    } finally {
+      setIsExporting(false);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -216,7 +300,6 @@ export default function Usage() {
                           ₹{camp.costRupees.toLocaleString("en-IN")}
                         </td>
                         <td className="px-5 py-3.5">
-                          {/* mini spend bar */}
                           <div className="w-16 bg-gray-100 rounded-full h-1.5">
                             <div
                               className="bg-indigo-400 rounded-full h-1.5"
@@ -232,6 +315,63 @@ export default function Usage() {
             </div>
           </div>
         )}
+
+        {/* Monthly Invoice Export */}
+        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100">
+            <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+              <FileText className="h-4 w-4 text-indigo-500" />
+              Monthly Invoice Export
+            </h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Download a CSV invoice for any month — includes every call, minutes billed, and a cost summary.
+            </p>
+          </div>
+          <div className="px-5 py-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Calendar className="h-4 w-4 text-gray-400 flex-shrink-0" />
+              {monthsLoading ? (
+                <div className="h-9 w-44 bg-gray-100 rounded-lg animate-pulse" />
+              ) : (
+                <select
+                  value={selectedMonth}
+                  onChange={(e) => { setSelectedMonth(e.target.value); setExportError(""); }}
+                  className="text-sm border border-gray-200 rounded-lg px-3 py-2 text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-200 bg-white min-w-[200px]"
+                >
+                  <option value="">Select a month…</option>
+                  {(monthsData ?? []).map((m: any) => (
+                    <option key={m.value} value={m.value}>
+                      {m.label} ({m.callCount} {m.callCount === 1 ? "call" : "calls"})
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+            <button
+              onClick={handleExport}
+              disabled={!selectedMonth || isExporting}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {isExporting ? (
+                <div className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              {isExporting ? "Generating…" : "Download CSV"}
+            </button>
+            {!monthsLoading && (monthsData ?? []).length === 0 && (
+              <span className="text-xs text-gray-400">No call history yet — invoices will appear once calls are made.</span>
+            )}
+          </div>
+          {exportError && (
+            <div className="px-5 pb-4">
+              <p className="text-xs text-red-600 flex items-center gap-1.5">
+                <AlertTriangle className="h-3 w-3" />
+                {exportError}
+              </p>
+            </div>
+          )}
+        </div>
 
         {/* Call log */}
         <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">

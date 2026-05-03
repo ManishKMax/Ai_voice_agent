@@ -1,6 +1,7 @@
 import { db, tenantsTable, pricingConfigTable, kycDocumentsTable } from "@workspace/db";
 import { callsTable, leadsTable } from "@workspace/db/schema";
 import { eq, sql, desc, and, gte, lt } from "drizzle-orm";
+import { logger } from "../../lib/logger.js";
 
 export async function getOrCreateTenant(clerkUserId: string, name: string, email: string) {
   const existing = await db
@@ -15,6 +16,8 @@ export async function getOrCreateTenant(clerkUserId: string, name: string, email
     .insert(tenantsTable)
     .values({ clerkUserId, name, email })
     .returning();
+
+  logger.info({ clerkUserId, tenantId: created?.id, email }, "Portal tenant created");
 
   return created;
 }

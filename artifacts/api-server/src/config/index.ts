@@ -9,9 +9,9 @@ export const config = {
   sarvam: {
     apiKey: process.env.SARVAM_API_KEY ?? "",
   },
-  baseUrl: process.env.REPLIT_DEV_DOMAIN
-    ? `https://${process.env.REPLIT_DEV_DOMAIN}`
-    : process.env.REPLIT_DOMAINS
+  baseUrl: process.env.REPLIT_DOMAINS
     ? `https://${process.env.REPLIT_DOMAINS.split(",")[0].trim()}`
+    : process.env.REPLIT_DEV_DOMAIN
+    ? `https://${process.env.REPLIT_DEV_DOMAIN}`
     : `http://localhost:8080`,
 };

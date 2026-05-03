@@ -65,6 +65,7 @@ export default function Dashboard() {
               { to: "/dashboard", label: "Dashboard" },
               { to: "/leads", label: "Leads" },
               { to: "/billing", label: "Billing" },
+              { to: "/usage", label: "Usage" },
               { to: "/kyc", label: "KYC" },
               { to: "/settings", label: "Settings" },
             ].map((n) => (

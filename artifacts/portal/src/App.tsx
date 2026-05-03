@@ -13,6 +13,7 @@ import Leads from "@/pages/leads";
 import Billing from "@/pages/billing";
 import KycUpload from "@/pages/kyc-upload";
 import Settings from "@/pages/settings";
+import Usage from "@/pages/usage";
 
 const clerkPubKey = publishableKeyFromHost(
   window.location.hostname,
@@ -156,6 +157,7 @@ const ProtectedLeads = () => <ProtectedRoute component={Leads} />;
 const ProtectedBilling = () => <ProtectedRoute component={Billing} />;
 const ProtectedKyc = () => <ProtectedRoute component={KycUpload} />;
 const ProtectedSettings = () => <ProtectedRoute component={Settings} />;
+const ProtectedUsage = () => <ProtectedRoute component={Usage} />;
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -199,6 +201,7 @@ function ClerkProviderWithRoutes() {
           <Route path="/billing" component={ProtectedBilling} />
           <Route path="/kyc" component={ProtectedKyc} />
           <Route path="/settings" component={ProtectedSettings} />
+          <Route path="/usage" component={ProtectedUsage} />
           <Route component={NotFound} />
         </Switch>
       </QueryClientProvider>

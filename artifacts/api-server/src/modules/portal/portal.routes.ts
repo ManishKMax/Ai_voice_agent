@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { getAuth } from "@clerk/express";
-import { getOrCreateTenant, getPricingConfig, submitKycDocument } from "./portal.service.js";
+import { getOrCreateTenant, getPricingConfig, submitKycDocument, getPortalUsage } from "./portal.service.js";
 import { ObjectStorageService } from "../../lib/objectStorage.js";
 
 const router = Router();
@@ -55,6 +55,17 @@ router.get("/me", requireClerkAuth, async (req: any, res, next) => {
         trialCallsLimit: pricing.trialCallsLimit,
       },
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/usage", requireClerkAuth, async (req: any, res, next) => {
+  try {
+    const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) ?? "20")));
+    const offset = Math.max(0, parseInt((req.query.offset as string) ?? "0"));
+    const data = await getPortalUsage(limit, offset);
+    res.json(data);
   } catch (err) {
     next(err);
   }

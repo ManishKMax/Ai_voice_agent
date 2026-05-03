@@ -51,7 +51,7 @@ async function fetchPortalDebugSession() {
 }
 
 export default function Dashboard() {
-  const { user } = useUser();
+  const { isLoaded, user } = useUser();
   const { signOut } = useClerk();
 
   const { data, isLoading, error } = useQuery({
@@ -68,8 +68,10 @@ export default function Dashboard() {
   });
 
   useEffect(() => {
-    void fetchPortalMe().catch(() => undefined);
-  }, []);
+    if (isLoaded && user) {
+      void fetchPortalMe().catch(() => undefined);
+    }
+  }, [isLoaded, user]);
 
   const tenant = data?.tenant;
   const pricing = data?.pricing;

@@ -89,6 +89,15 @@ export default function UsersPage() {
 
   const users: any[] = data?.users ?? [];
   const tenants: any[] = tenantsData?.tenants ?? [];
+  const portalUsers = tenants.map((t: any) => ({
+    id: `tenant-${t.id}`,
+    name: t.name,
+    email: t.email,
+    role: "PORTAL_USER",
+    isActive: t.isActive,
+    createdAt: t.createdAt,
+  }));
+  const displayUsers = [...users, ...portalUsers];
 
   const createMutation = useMutation({
     mutationFn: (body: any) => apiFetch("/admin/users", { method: "POST", body: JSON.stringify(body) }),
@@ -159,9 +168,9 @@ export default function UsersPage() {
           <TableBody>
             {isLoading ? (
               <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">Loading...</TableCell></TableRow>
-            ) : users.length === 0 ? (
+            ) : displayUsers.length === 0 ? (
               <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No users found</TableCell></TableRow>
-            ) : users.map((u) => (
+            ) : displayUsers.map((u) => (
               <TableRow key={u.id}>
                 <TableCell className="font-medium">{u.name}</TableCell>
                 <TableCell className="text-muted-foreground">{u.email}</TableCell>

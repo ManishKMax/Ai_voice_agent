@@ -176,14 +176,14 @@ function ClerkProviderWithRoutes() {
       localization={{
         signIn: {
           start: {
-            title: "Welcome back",
-            subtitle: "Sign in to your AI Voice Agent account",
+            title: "Welcome back, User",
+            subtitle: "Sign in to your Voice Agent account with Google",
           },
         },
         signUp: {
           start: {
-            title: "Get started free",
-            subtitle: "Create your AI Voice Agent account",
+            title: "Create your User account",
+            subtitle: "Continue with Google to use the Voice Agent portal",
           },
         },
       }}

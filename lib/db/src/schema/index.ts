@@ -5,3 +5,6 @@ export * from "./call_analysis";
 export * from "./agent_settings";
 export * from "./platform_settings";
 export * from "./api_keys";
+export * from "./tenants";
+export * from "./pricing_config";
+export * from "./kyc_documents";

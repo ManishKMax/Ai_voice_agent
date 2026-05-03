@@ -1,8 +1,11 @@
-# AI Lead Calling & Qualification System
+# AI Lead Calling & Qualification System — VoiceAgent SaaS
 
 ## Overview
 
-A production-ready AI-powered outbound call system that accepts leads, calls them automatically via Twilio, conducts live voice conversations using Sarvam AI, analyzes transcripts, and updates lead qualification status.
+A production-ready AI-powered outbound call system with two products:
+
+1. **Admin Dashboard** (`/`) — internal JWT-authenticated dashboard for managing leads, calls, settings
+2. **User Portal** (`/portal/`) — multi-tenant SaaS portal for customers to sign up, trial, and use the AI calling service
 
 ## Stack
 
@@ -15,7 +18,8 @@ A production-ready AI-powered outbound call system that accepts leads, calls the
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
 - **API codegen**: Orval (from OpenAPI spec)
 - **Build**: esbuild (CJS bundle)
-- **Auth**: JWT (jsonwebtoken + bcryptjs)
+- **Admin auth**: JWT (jsonwebtoken + bcryptjs)
+- **Portal auth**: Clerk (Google + email/password)
 - **Queue**: In-memory job queue with retry logic (max 3 retries, 2hr delay)
 - **Voice**: Twilio Programmable Voice (Gather + Play)
 - **AI TTS**: Sarvam AI Bulbul v3 (`bulbul:v3`) — Indian-accent voice synthesis
@@ -26,7 +30,8 @@ A production-ready AI-powered outbound call system that accepts leads, calls the
 ## Artifacts
 
 - `artifacts/api-server` — Express backend at `/api`
-- `artifacts/dashboard` — React frontend at `/`
+- `artifacts/dashboard` — React admin frontend at `/`
+- `artifacts/portal` — React user portal at `/portal/` (Clerk auth)
 
 ## Key Commands
 
@@ -37,15 +42,41 @@ A production-ready AI-powered outbound call system that accepts leads, calls the
 
 ## Database Schema
 
+### Admin/Core tables
 - `users` — registered users (JWT auth)
-- `leads` — lead records with full Phase 1 fields:
-  - status: pending | calling | completed | interested | not_interested | no_response | callback | dnc
-  - `tags` TEXT — comma-separated tags (hot, warm, cold, vip, callback, etc.)
-  - `priority` INTEGER — 1=low, 2=normal, 3=high, 4=urgent (default 2)
-  - `source_id` TEXT — CRM cross-reference ID
-  - `dnc` BOOLEAN — Do Not Call flag (default false)
+- `leads` — lead records with full Phase 1 fields
 - `calls` — call log with Twilio SID, status, duration, transcript, recording URL
 - `platform_settings` — runtime credentials (Twilio SID/token, Sarvam API key, call behavior)
+
+### Multi-tenant Portal tables (Phase 1)
+- `tenants` — per-customer tenant record linked to Clerk user ID
+  - `clerk_user_id` (unique) — links to Clerk user
+  - `kyc_status`: pending | submitted | approved | rejected
+  - `trial_calls_used` — calls used during trial (limit: 5)
+  - `minutes_balance` — purchased minutes balance
+  - `telephony_provider` — twilio | exotel
+  - Twilio/Exotel credential fields (per-tenant)
+- `pricing_config` — singleton config row
+  - `per_minute_rate_paise`: 500 (₹5/min)
+  - `monthly_plan_cost_paise`: 200000 (₹2000/month)
+  - `trial_calls_limit`: 5
+  - `monthly_minutes_quota`: 400 min/month
+- `kyc_documents` — uploaded KYC docs per tenant (aadhaar, gst)
+
+## Portal API Routes
+
+- `GET /api/portal/me` — get or create tenant by Clerk user ID, returns trial status + pricing
+
+## Portal Frontend Pages
+
+- `/portal/` — Landing page (public, redirects to /portal/dashboard if signed in)
+- `/portal/sign-in` — Clerk sign-in (Google + email)
+- `/portal/sign-up` — Clerk sign-up
+- `/portal/dashboard` — User dashboard with trial banner, KYC status, stats
+- `/portal/leads` — Lead management (scaffold, Phase 2)
+- `/portal/billing` — Billing & top-up (scaffold, Phase 3)
+- `/portal/kyc` — KYC document upload (Aadhaar + GST)
+- `/portal/settings` — Twilio/Exotel credential management
 
 ## Agent Configuration
 
@@ -100,7 +131,7 @@ Call ends → transcript saved → Sarvam AI analysis runs
 
 ## API Modules
 
-### Auth
+### Admin Auth
 - `POST /api/auth/register` — register user
 - `POST /api/auth/login` — login, returns JWT
 
@@ -109,31 +140,34 @@ Call ends → transcript saved → Sarvam AI analysis runs
 - `POST /api/leads/upload` — CSV upload (bulk import)
 - `POST /api/leads/bulk` — bulk action: delete | requeue | set_status | set_dnc
 - `GET /api/leads` — list leads (filter by status, search, paginate)
-- `GET /api/leads/export` — export as CSV (includes tags, priority, dnc, source_id)
+- `GET /api/leads/export` — export as CSV
 - `GET /api/leads/:id` — single lead
-- `PATCH /api/leads/:id` — update name, phone, source, notes, tags, priority, status, dnc
+- `PATCH /api/leads/:id` — update lead
 - `DELETE /api/leads/:id` — delete lead + all call history
 
 ### Calls
 - `POST /api/call/initiate/:leadId` — manually trigger a call
-- `POST /api/voice` — Twilio TwiML webhook (returns Gather TwiML)
+- `POST /api/voice` — Twilio TwiML webhook
 - `POST /api/voice/gather` — handles lead's speech → AI response → next TwiML
-- `GET /api/voice/audio/:id` — serve TTS audio blob (Twilio downloads via Play)
+- `GET /api/voice/audio/:id` — serve TTS audio blob
 - `POST /api/call-status` — Twilio call status webhook
 - `GET /api/calls` — list calls
 - `GET /api/calls/:id` — single call
-- `GET /api/agent-config` — current agent configuration
 
-### Dashboard
-- `GET /api/dashboard/stats` — stats (leads by status, calls, queue, recent)
+### Portal (Clerk-authenticated)
+- `GET /api/portal/me` — get/create tenant, return trial + pricing info
 
 ## Environment Variables Required
 
 - `TWILIO_ACCOUNT_SID` — Twilio Console
-- `TWILIO_AUTH_TOKEN` — Twilio Console  
-- `TWILIO_PHONE_NUMBER` — Your Twilio number (e.g. +12298605475)
-- `SARVAM_API_KEY` — Sarvam AI dashboard (api-subscription-key)
-- `JWT_SECRET` — Random secret for JWT signing
+- `TWILIO_AUTH_TOKEN` — Twilio Console
+- `TWILIO_PHONE_NUMBER` — Your Twilio number
+- `SARVAM_API_KEY` — Sarvam AI dashboard
+- `JWT_SECRET` — Random secret for JWT signing (admin dashboard)
+- `SESSION_SECRET` — Session secret
+- `CLERK_SECRET_KEY` — Auto-provisioned by Replit Auth (Clerk)
+- `CLERK_PUBLISHABLE_KEY` — Auto-provisioned by Replit Auth (Clerk)
+- `VITE_CLERK_PUBLISHABLE_KEY` — Auto-provisioned by Replit Auth (Clerk)
 - `DATABASE_URL` — Auto-provisioned by Replit
 
 ## Seed Data
@@ -149,9 +183,10 @@ Test lead 13: `yk` at `+919078802278` (verified Twilio trial destination)
   - Status Callback: `https://<your-domain>/api/call-status`
 - Error 21219 = unverified destination → lead is auto-marked `no_response`, never retried
 
-## Development
+## Development Notes
 
-- Twilio signature validation is **skipped** in `NODE_ENV=development` (set by the dev workflow)
+- Twilio signature validation is **skipped** in `NODE_ENV=development`
 - Audio files served at `/api/voice/audio/:id` expire after 10 minutes
 - Conversation sessions (in-memory) expire after 30 minutes
-- `sarvam-105b` requires `max_tokens: 2000` due to thinking mode (uses ~1000-1500 tokens per response)
+- `sarvam-105b` requires `max_tokens: 2000` due to thinking mode
+- DB push interactive prompts: use `echo "" | pnpm --filter @workspace/db run push` or create tables directly via SQL

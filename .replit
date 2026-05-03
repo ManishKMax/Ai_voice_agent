@@ -51,5 +51,14 @@ externalPort = 80
 localPort = 23183
 externalPort = 3000
 
+[[ports]]
+localPort = 25265
+externalPort = 3001
+
 [nix]
 channel = "stable-25_05"
+
+[userenv]
+
+[userenv.shared]
+VITE_CLERK_PUBLISHABLE_KEY = "pk_test_ZGlyZWN0LWVsZi0xMC5jbGVyay5hY2NvdW50cy5kZXYk"

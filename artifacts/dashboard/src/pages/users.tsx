@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Plus,
   Trash2,
   ShieldOff,
   Link as LinkIcon,
@@ -84,15 +83,9 @@ export default function UsersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">User Management</h1>
-          <p className="text-muted-foreground text-sm mt-1">Voice Agent users who signed up through the portal</p>
-        </div>
-        <Button disabled>
-          <Plus className="h-4 w-4 mr-2" />
-          Add User
-        </Button>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">User Management</h1>
+        <p className="text-muted-foreground text-sm mt-1">Voice Agent users who signed up through the portal</p>
       </div>
 
       <div className="rounded-lg border bg-card">

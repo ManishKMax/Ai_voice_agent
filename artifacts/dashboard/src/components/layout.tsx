@@ -11,6 +11,7 @@ import {
   Settings,
   Trophy,
   ShieldCheck,
+  Radio,
 } from "lucide-react";
 import { useHealthCheck } from "@workspace/api-client-react";
 
@@ -27,6 +28,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { href: "/agent", label: "Agent Settings", icon: Bot },
     { href: "/settings", label: "Integrations", icon: Settings },
     { href: "/kyc", label: "KYC Review", icon: ShieldCheck },
+    { href: "/monitor", label: "Live Monitor", icon: Radio },
   ];
 
   return (

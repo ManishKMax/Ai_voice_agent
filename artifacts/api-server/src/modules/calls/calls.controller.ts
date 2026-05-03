@@ -27,6 +27,7 @@ import {
 } from "./calls.service.js";
 import { getLeadById } from "../leads/leads.service.js";
 import { updateLeadStatus } from "../leads/leads.service.js";
+import { broadcastSse } from "../../services/sse.service.js";
 import { db } from "@workspace/db";
 import { leadsTable } from "@workspace/db/schema";
 import { eq } from "drizzle-orm";
@@ -129,6 +130,17 @@ async function processConversationJob(jobId: string, speechResult: string): Prom
     }
 
     jobs.set(jobId, { ...job, status: "done", audioId, agentText, isEnd });
+
+    broadcastSse("call.turn", {
+      callSid,
+      leadId,
+      leadName: session?.leadName ?? "",
+      turn: nextTurn,
+      userText: speechResult,
+      agentText,
+      isEnd,
+    });
+
     logger.info({ jobId, leadId, turn: nextTurn, isEnd }, "Conversation job completed");
   } catch (err) {
     logger.error({ err, jobId, leadId }, "Conversation job failed");
@@ -160,6 +172,16 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
 
     createSession(callSid, leadId, leadName, systemPrompt);
     addAgentOpening(callSid, greetingText);
+
+    broadcastSse("call.started", {
+      callSid,
+      leadId,
+      leadName,
+      phone: lead?.phone ?? "",
+      agentText: greetingText,
+      turn: 0,
+      startedAt: Date.now(),
+    });
 
     logger.info({ leadId, callSid, leadName }, "Session created, generating greeting audio");
 
@@ -314,6 +336,15 @@ export async function voiceRespondWebhook(req: Request, res: Response): Promise<
 
 async function finaliseCall(callSid: string, leadId: number): Promise<void> {
   const session = endSession(callSid);
+
+  broadcastSse("call.ended", {
+    callSid,
+    leadId,
+    leadName: session?.leadName ?? "",
+    turns: session?.turnCount ?? 0,
+    endedAt: Date.now(),
+  });
+
   if (!session || !session.transcript) {
     logger.warn({ callSid, leadId }, "finaliseCall: no session transcript found");
     return;

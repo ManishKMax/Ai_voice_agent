@@ -27,7 +27,12 @@ async function fetchPortalMe() {
   const res = await fetch(`${basePath}/api/portal/me`, {
     credentials: "include",
   });
-  if (!res.ok) throw new Error("Failed to fetch tenant info");
+  if (!res.ok) {
+    const message = res.status === 401 || res.status === 403
+      ? "Your session expired. Please sign in again."
+      : "Failed to fetch tenant info";
+    throw new Error(message);
+  }
   return res.json();
 }
 
@@ -38,7 +43,8 @@ export default function Dashboard() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["portal-me"],
     queryFn: fetchPortalMe,
-    retry: 1,
+    retry: false,
+    staleTime: 10_000,
   });
 
   const tenant = data?.tenant;
@@ -53,7 +59,6 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
       <header className="bg-white border-b border-gray-100">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -87,7 +92,6 @@ export default function Dashboard() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-8">
-        {/* Welcome */}
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-gray-900">
             Welcome back, {user?.firstName || user?.username || "there"} 👋
@@ -95,7 +99,6 @@ export default function Dashboard() {
           <p className="text-gray-500 mt-1">Here's your AI calling overview</p>
         </div>
 
-        {/* KYC Banner */}
         {tenant && tenant.kycStatus !== "approved" && (
           <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-4 flex items-start gap-3">
             <AlertTriangle className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />
@@ -126,7 +129,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Low-balance warning (approved tenants only) */}
         {tenant && tenant.kycStatus === "approved" && (() => {
           const level = minuteLevel(tenant.minutesBalance);
           if (level === "ok") return null;
@@ -178,13 +180,12 @@ export default function Dashboard() {
 
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-2xl p-4 mb-6 text-red-700 text-sm">
-            Could not load account info. Please refresh the page.
+            {String((error as Error)?.message ?? "Failed to load account info")}
           </div>
         )}
 
         {tenant && (
           <>
-            {/* Stats cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
               <div className="bg-white rounded-2xl border border-gray-100 p-5">
                 <div className="flex items-center justify-between mb-3">
@@ -242,7 +243,6 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Quick actions */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Link to="/leads" className="group bg-white border border-gray-100 rounded-2xl p-6 hover:shadow-md hover:border-indigo-200 transition-all">
                 <div className="flex items-center gap-3 mb-3">

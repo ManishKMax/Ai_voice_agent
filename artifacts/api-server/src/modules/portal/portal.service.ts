@@ -1,4 +1,4 @@
-import { db, tenantsTable, pricingConfigTable } from "@workspace/db";
+import { db, tenantsTable, pricingConfigTable, kycDocumentsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 
 export async function getOrCreateTenant(clerkUserId: string, name: string, email: string) {
@@ -41,4 +41,33 @@ export async function incrementTrialCalls(tenantId: number) {
     .where(eq(tenantsTable.id, tenantId))
     .returning();
   return updated;
+}
+
+export async function submitKycDocument(
+  tenantId: number,
+  documents: Array<{
+    documentType: "aadhaar" | "gst";
+    objectPath: string;
+    fileName: string;
+  }>,
+) {
+  const saved = await db
+    .insert(kycDocumentsTable)
+    .values(
+      documents.map((doc) => ({
+        tenantId,
+        documentType: doc.documentType,
+        fileUrl: doc.objectPath,
+        fileName: doc.fileName,
+        status: "pending" as const,
+      })),
+    )
+    .returning();
+
+  await db
+    .update(tenantsTable)
+    .set({ kycStatus: "submitted", updatedAt: new Date() })
+    .where(eq(tenantsTable.id, tenantId));
+
+  return saved;
 }

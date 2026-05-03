@@ -10,6 +10,7 @@ import agentRouter from "../modules/agent/agent.routes.js";
 import settingsRouter from "../modules/settings/settings.routes.js";
 import sseRouter from "../modules/sse/sse.routes.js";
 import portalRouter from "../modules/portal/portal.routes.js";
+import storageRouter from "./storage.js";
 
 const router: IRouter = Router();
 
@@ -24,5 +25,6 @@ router.use(agentRouter);
 router.use(settingsRouter);
 router.use(sseRouter);
 router.use("/portal", portalRouter);
+router.use(storageRouter);
 
 export default router;

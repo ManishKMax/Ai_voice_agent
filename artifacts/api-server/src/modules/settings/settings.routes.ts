@@ -8,6 +8,7 @@ import {
   getTwilioNumbers,
   getWebhookInfo,
   testWebhook,
+  testEmail,
   listApiKeys,
   createApiKey,
   deleteApiKey,
@@ -22,6 +23,7 @@ router.post("/settings/test-sarvam", requireAuth, testSarvam);
 router.get("/settings/twilio-numbers", requireAuth, getTwilioNumbers);
 router.get("/settings/webhook-info", requireAuth, getWebhookInfo);
 router.post("/settings/test-webhook", requireAuth, testWebhook);
+router.post("/settings/test-email", requireAuth, testEmail);
 
 router.get("/settings/api-keys", requireAuth, listApiKeys);
 router.post("/settings/api-keys", requireAuth, createApiKey);

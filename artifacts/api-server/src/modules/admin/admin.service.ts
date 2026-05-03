@@ -1,5 +1,6 @@
 import { db, tenantsTable, kycDocumentsTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
+import { sendKycDecisionEmail } from "../../services/email.service.js";
 
 export async function listTenantsWithKyc() {
   const tenants = await db
@@ -66,5 +67,9 @@ export async function updateTenantKyc(
       .where(eq(kycDocumentsTable.tenantId, tenantId));
   }
 
-  return getTenantWithKyc(tenantId);
+  const tenant = await getTenantWithKyc(tenantId);
+  if (tenant) {
+    sendKycDecisionEmail(tenant.email, tenant.name, kycStatus, adminNotes).catch(() => {});
+  }
+  return tenant;
 }

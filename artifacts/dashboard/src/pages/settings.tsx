@@ -21,6 +21,7 @@ import {
   Trash2,
   Send,
   Zap,
+  Mail,
 } from "lucide-react";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -53,9 +54,15 @@ interface SettingsData {
   retryDelay3: number;
   webhookUrl: string;
   webhookSecret: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpUser: string;
+  smtpPass: string;
+  smtpFrom: string;
   twilioConnected: boolean;
   sarvamConnected: boolean;
   webhookConfigured: boolean;
+  smtpConfigured: boolean;
 }
 
 interface WebhookInfo {
@@ -219,13 +226,19 @@ export default function Settings() {
     retryDelay3: 1440,
     webhookUrl: "",
     webhookSecret: "",
+    smtpHost: "",
+    smtpPort: 587,
+    smtpUser: "",
+    smtpPass: "",
+    smtpFrom: "",
   });
 
   const [currentStatus, setCurrentStatus] = useState<{
     twilioConnected: boolean;
     sarvamConnected: boolean;
     webhookConfigured: boolean;
-  }>({ twilioConnected: false, sarvamConnected: false, webhookConfigured: false });
+    smtpConfigured: boolean;
+  }>({ twilioConnected: false, sarvamConnected: false, webhookConfigured: false, smtpConfigured: false });
 
   const [twilioStatus, setTwilioStatus] = useState<ConnectionStatus>("idle");
   const [sarvamStatus, setSarvamStatus] = useState<ConnectionStatus>("idle");
@@ -233,6 +246,10 @@ export default function Settings() {
   const [twilioMessage, setTwilioMessage] = useState("");
   const [sarvamMessage, setSarvamMessage] = useState("");
   const [webhookMessage, setWebhookMessage] = useState("");
+
+  const [emailTestStatus, setEmailTestStatus] = useState<ConnectionStatus>("idle");
+  const [emailTestMessage, setEmailTestMessage] = useState("");
+  const [emailTestRecipient, setEmailTestRecipient] = useState("");
 
   const [webhookInfo, setWebhookInfo] = useState<WebhookInfo | null>(null);
   const [twilioNumbers, setTwilioNumbers] = useState<{ phoneNumber: string; friendlyName: string }[]>([]);
@@ -255,6 +272,7 @@ export default function Settings() {
           twilioConnected: d.twilioConnected,
           sarvamConnected: d.sarvamConnected,
           webhookConfigured: d.webhookConfigured,
+          smtpConfigured: d.smtpConfigured,
         });
         setForm({
           twilioAccountSid: "",
@@ -269,6 +287,11 @@ export default function Settings() {
           retryDelay3: d.retryDelay3 ?? 1440,
           webhookUrl: d.webhookUrl ?? "",
           webhookSecret: "",
+          smtpHost: d.smtpHost ?? "",
+          smtpPort: d.smtpPort ?? 587,
+          smtpUser: d.smtpUser ?? "",
+          smtpPass: "",
+          smtpFrom: d.smtpFrom ?? "",
         });
       }
       if (webhookRes.success) setWebhookInfo(webhookRes.data);
@@ -299,6 +322,12 @@ export default function Settings() {
       if (form.sarvamApiKey)     payload.sarvamApiKey     = form.sarvamApiKey;
       if (form.webhookSecret)    payload.webhookSecret    = form.webhookSecret;
 
+      payload.smtpHost = form.smtpHost;
+      payload.smtpPort = form.smtpPort;
+      payload.smtpUser = form.smtpUser;
+      payload.smtpFrom = form.smtpFrom;
+      if (form.smtpPass) payload.smtpPass = form.smtpPass;
+
       const res = await apiFetch("/api/settings", {
         method: "PATCH",
         body: JSON.stringify(payload),
@@ -309,8 +338,9 @@ export default function Settings() {
           twilioConnected: res.data.twilioConnected,
           sarvamConnected: res.data.sarvamConnected,
           webhookConfigured: res.data.webhookConfigured,
+          smtpConfigured: res.data.smtpConfigured,
         });
-        setForm((f) => ({ ...f, twilioAccountSid: "", twilioAuthToken: "", sarvamApiKey: "", webhookSecret: "" }));
+        setForm((f) => ({ ...f, twilioAccountSid: "", twilioAuthToken: "", sarvamApiKey: "", webhookSecret: "", smtpPass: "" }));
         toast({ title: "Settings saved", description: "All changes are now active." });
       } else {
         toast({ title: "Save failed", description: res.message ?? "Unknown error", variant: "destructive" });
@@ -354,6 +384,18 @@ export default function Settings() {
     });
     setWebhookTestStatus(res.success ? "ok" : "error");
     setWebhookMessage(res.message ?? "");
+  }
+
+  async function handleTestEmail() {
+    if (!emailTestRecipient) return;
+    setEmailTestStatus("testing");
+    setEmailTestMessage("");
+    const res = await apiFetch("/api/settings/test-email", {
+      method: "POST",
+      body: JSON.stringify({ to: emailTestRecipient }),
+    });
+    setEmailTestStatus(res.success ? "ok" : "error");
+    setEmailTestMessage(res.message ?? "");
   }
 
   async function loadTwilioNumbers() {
@@ -751,6 +793,125 @@ export default function Settings() {
                 {webhookMessage}
               </p>
             )}
+          </div>
+        </div>
+      </section>
+
+      {/* Email Notifications Section */}
+      <section className="rounded-xl border border-border bg-card shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-card">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-lg bg-sky-50 dark:bg-sky-950 flex items-center justify-center">
+              <Mail className="h-4 w-4 text-sky-600" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-foreground">Email Notifications</h2>
+              <p className="text-xs text-muted-foreground">Send tenants an email when their KYC is approved or rejected</p>
+            </div>
+          </div>
+          <StatusBadge status={emailTestStatus} connected={currentStatus.smtpConfigured} />
+        </div>
+
+        <div className="p-6 space-y-5">
+          <SetupGuide
+            title="SMTP configuration tips"
+            link="https://support.google.com/mail/answer/185833"
+            linkLabel="Create a Gmail App Password"
+            steps={[
+              "For Gmail: enable 2-Step Verification, then create an App Password under your Google Account → Security",
+              "Use smtp.gmail.com / port 587 / your Gmail address / App Password (not your main password)",
+              "For other providers (Outlook, Zoho, Mailgun SMTP): use their respective SMTP host and port",
+              "The 'From' field can be a friendly name like: YourCompany <noreply@yourcompany.com>",
+            ]}
+          />
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">SMTP Host</label>
+              <input
+                type="text"
+                value={form.smtpHost}
+                onChange={(e) => setField("smtpHost", e.target.value)}
+                placeholder="smtp.gmail.com"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring placeholder:text-muted-foreground"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">Port</label>
+              <select
+                value={form.smtpPort}
+                onChange={(e) => setField("smtpPort", Number(e.target.value))}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value={587}>587 — STARTTLS (recommended)</option>
+                <option value={465}>465 — SSL/TLS</option>
+                <option value={25}>25 — Plain (not recommended)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">Username / Email</label>
+              <input
+                type="text"
+                value={form.smtpUser}
+                onChange={(e) => setField("smtpUser", e.target.value)}
+                placeholder="you@yourcompany.com"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring placeholder:text-muted-foreground"
+              />
+            </div>
+            <SecretInput
+              label="Password / App Password"
+              value={form.smtpPass}
+              onChange={(v) => setField("smtpPass", v)}
+              placeholder={currentStatus.smtpConfigured ? "Leave blank to keep existing" : "Enter password…"}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-foreground">From Address</label>
+            <input
+              type="text"
+              value={form.smtpFrom}
+              onChange={(e) => setField("smtpFrom", e.target.value)}
+              placeholder='YourCompany <noreply@yourcompany.com>'
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring placeholder:text-muted-foreground"
+            />
+            <p className="text-xs text-muted-foreground">Defaults to the username above if left blank.</p>
+          </div>
+
+          <div className="rounded-md border border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/30 p-3 text-sm text-sky-700 dark:text-sky-300 flex items-start gap-2">
+            <Mail className="h-4 w-4 mt-0.5 flex-shrink-0" />
+            <span>Once configured, tenants will automatically receive a branded email when you approve or reject their KYC submission from the tenant list.</span>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 pt-1 border-t border-border">
+            <div className="flex-1 space-y-1.5 w-full sm:w-auto">
+              <label className="text-xs font-medium text-muted-foreground">Send a test email to</label>
+              <input
+                type="email"
+                value={emailTestRecipient}
+                onChange={(e) => setEmailTestRecipient(e.target.value)}
+                placeholder="yourself@example.com"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring placeholder:text-muted-foreground"
+              />
+            </div>
+            <div className="flex items-center gap-3 sm:mt-5">
+              <button
+                onClick={handleTestEmail}
+                disabled={emailTestStatus === "testing" || !emailTestRecipient}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border text-sm hover:bg-accent disabled:opacity-60 transition-colors whitespace-nowrap"
+              >
+                {emailTestStatus === "testing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                Send Test
+              </button>
+              {emailTestMessage && (
+                <p className={`text-sm ${emailTestStatus === "ok" ? "text-green-600" : "text-red-500"}`}>
+                  {emailTestMessage}
+                </p>
+              )}
+            </div>
           </div>
         </div>
       </section>

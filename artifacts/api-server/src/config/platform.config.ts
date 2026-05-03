@@ -17,6 +17,11 @@ export interface PlatformSettings {
   retryDelay3: number;
   webhookUrl: string;
   webhookSecret: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpUser: string;
+  smtpPass: string;
+  smtpFrom: string;
 }
 
 export let platformSettings: PlatformSettings = buildDefaults();
@@ -35,6 +40,11 @@ function buildDefaults(): PlatformSettings {
     retryDelay3: 1440,
     webhookUrl: "",
     webhookSecret: "",
+    smtpHost: "",
+    smtpPort: 587,
+    smtpUser: "",
+    smtpPass: "",
+    smtpFrom: "",
   };
 }
 
@@ -64,6 +74,11 @@ export async function loadPlatformSettings(): Promise<void> {
         retryDelay3:       s.retryDelay3       ?? platformSettings.retryDelay3,
         webhookUrl:        s.webhookUrl        ?? platformSettings.webhookUrl,
         webhookSecret:     s.webhookSecret     ?? platformSettings.webhookSecret,
+        smtpHost:          s.smtpHost          ?? platformSettings.smtpHost,
+        smtpPort:          s.smtpPort          ?? platformSettings.smtpPort,
+        smtpUser:          s.smtpUser          ?? platformSettings.smtpUser,
+        smtpPass:          s.smtpPass          ?? platformSettings.smtpPass,
+        smtpFrom:          s.smtpFrom          ?? platformSettings.smtpFrom,
       };
       applyToLiveConfig(platformSettings);
       logger.info(
@@ -92,6 +107,11 @@ export async function updatePlatformSettings(patch: Partial<PlatformSettings>): 
     retryDelay3:       platformSettings.retryDelay3,
     webhookUrl:        platformSettings.webhookUrl || undefined,
     webhookSecret:     platformSettings.webhookSecret || undefined,
+    smtpHost:          platformSettings.smtpHost  || undefined,
+    smtpPort:          platformSettings.smtpPort  || undefined,
+    smtpUser:          platformSettings.smtpUser  || undefined,
+    smtpPass:          platformSettings.smtpPass  || undefined,
+    smtpFrom:          platformSettings.smtpFrom  || undefined,
   };
 
   const rows = await db.select({ id: platformSettingsTable.id }).from(platformSettingsTable).limit(1);
@@ -126,8 +146,14 @@ export function getMaskedSettings() {
     retryDelay3:       platformSettings.retryDelay3,
     webhookUrl:        platformSettings.webhookUrl ?? "",
     webhookSecret:     platformSettings.webhookSecret ? maskSecret(platformSettings.webhookSecret) : "",
+    smtpHost:          platformSettings.smtpHost ?? "",
+    smtpPort:          platformSettings.smtpPort ?? 587,
+    smtpUser:          platformSettings.smtpUser ?? "",
+    smtpPass:          platformSettings.smtpPass ? maskSecret(platformSettings.smtpPass) : "",
+    smtpFrom:          platformSettings.smtpFrom ?? "",
     twilioConnected:   !!(platformSettings.twilioAccountSid && platformSettings.twilioAuthToken),
     sarvamConnected:   !!platformSettings.sarvamApiKey,
     webhookConfigured: !!platformSettings.webhookUrl,
+    smtpConfigured:    !!(platformSettings.smtpHost && platformSettings.smtpUser && platformSettings.smtpPass),
   };
 }

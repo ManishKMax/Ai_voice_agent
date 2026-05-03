@@ -13,6 +13,11 @@ export interface StoredPlatformSettings {
   retryDelay3?: number;
   webhookUrl?: string;
   webhookSecret?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpUser?: string;
+  smtpPass?: string;
+  smtpFrom?: string;
 }
 
 export const platformSettingsTable = pgTable("platform_settings", {

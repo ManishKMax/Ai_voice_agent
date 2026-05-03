@@ -11,6 +11,7 @@ import {
   platformSettings,
 } from "../../config/platform.config.js";
 import { hashApiKey } from "../../middlewares/apikey.js";
+import { sendTestEmail } from "../../services/email.service.js";
 
 export async function getSettings(req: Request, res: Response, next: NextFunction) {
   try {
@@ -38,6 +39,14 @@ export async function patchSettings(req: Request, res: Response, next: NextFunct
     } = req.body;
 
     const patch: Record<string, unknown> = {};
+    const {
+      smtpHost,
+      smtpPort,
+      smtpUser,
+      smtpPass,
+      smtpFrom,
+    } = req.body;
+
     if (twilioAccountSid !== undefined && twilioAccountSid !== "") patch.twilioAccountSid = twilioAccountSid;
     if (twilioAuthToken  !== undefined && twilioAuthToken  !== "") patch.twilioAuthToken  = twilioAuthToken;
     if (twilioPhoneNumber !== undefined)                           patch.twilioPhoneNumber = twilioPhoneNumber;
@@ -50,6 +59,11 @@ export async function patchSettings(req: Request, res: Response, next: NextFunct
     if (retryDelay3      !== undefined) patch.retryDelay3     = Number(retryDelay3);
     if (webhookUrl       !== undefined) patch.webhookUrl      = webhookUrl;
     if (webhookSecret    !== undefined && webhookSecret !== "") patch.webhookSecret = webhookSecret;
+    if (smtpHost !== undefined) patch.smtpHost = smtpHost;
+    if (smtpPort !== undefined) patch.smtpPort = Number(smtpPort);
+    if (smtpUser !== undefined) patch.smtpUser = smtpUser;
+    if (smtpPass !== undefined && smtpPass !== "") patch.smtpPass = smtpPass;
+    if (smtpFrom !== undefined) patch.smtpFrom = smtpFrom;
 
     await updatePlatformSettings(patch as Parameters<typeof updatePlatformSettings>[0]);
     res.json({ success: true, data: getMaskedSettings() });
@@ -201,6 +215,21 @@ export async function testWebhook(req: Request, res: Response, next: NextFunctio
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Delivery failed";
     res.status(400).json({ success: false, message: `Webhook test failed: ${msg}` });
+  }
+}
+
+export async function testEmail(req: Request, res: Response, next: NextFunction) {
+  try {
+    const to = req.body.to as string | undefined;
+    if (!to || !to.includes("@")) {
+      res.status(400).json({ success: false, message: "A valid recipient email address is required" });
+      return;
+    }
+    await sendTestEmail(to);
+    res.json({ success: true, message: `Test email sent to ${to}` });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Failed to send test email";
+    res.status(400).json({ success: false, message: msg });
   }
 }
 

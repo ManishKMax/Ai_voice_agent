@@ -44,11 +44,12 @@ Thumbs.db
 .cursor/rules/nx-rules.mdc
 .github/instructions/nx.instructions.md
 
-# Replit
+# Replit internal state — never commit
 .cache/
 .local/
 
 # Environment secrets — never commit real values
+# Copy .env.example → .env and fill in your values
 .env
 .env.local
 .env.*.local

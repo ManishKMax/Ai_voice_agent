@@ -200,6 +200,12 @@ export default function Dashboard() {
           </div>
         )}
 
+        <div className="bg-gray-100 border border-gray-200 rounded-2xl p-4 mb-6 text-xs text-gray-600">
+          <div>Clerk loaded: {isLoaded ? "yes" : "no"}</div>
+          <div>Signed in: {user ? "yes" : "no"}</div>
+          <div>Email: {user?.primaryEmailAddress?.emailAddress ?? "—"}</div>
+        </div>
+
         {tenant && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">

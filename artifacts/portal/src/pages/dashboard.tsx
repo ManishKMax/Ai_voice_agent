@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useUser, useClerk } from "@clerk/react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
@@ -41,6 +42,14 @@ async function fetchPortalMe() {
   return parseJsonOrThrow(res);
 }
 
+async function fetchPortalDebugSession() {
+  const res = await fetch(`${basePath}/api/portal/debug/session`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(res.status === 401 || res.status === 403 ? "Your session expired. Please sign in again." : "Failed to fetch debug session");
+  }
+  return parseJsonOrThrow(res);
+}
+
 export default function Dashboard() {
   const { user } = useUser();
   const { signOut } = useClerk();
@@ -51,6 +60,16 @@ export default function Dashboard() {
     retry: false,
     staleTime: 10_000,
   });
+  const { data: debugSession } = useQuery({
+    queryKey: ["portal-debug-session"],
+    queryFn: fetchPortalDebugSession,
+    retry: false,
+    staleTime: 10_000,
+  });
+
+  useEffect(() => {
+    void fetchPortalMe().catch(() => undefined);
+  }, []);
 
   const tenant = data?.tenant;
   const pricing = data?.pricing;
@@ -167,6 +186,15 @@ export default function Dashboard() {
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-2xl p-4 mb-6 text-red-700 text-sm">
             {String((error as Error)?.message ?? "Failed to load account info")}
+          </div>
+        )}
+
+        {debugSession && (
+          <div className="bg-white border border-gray-100 rounded-2xl p-4 mb-6 text-sm text-gray-700">
+            <div className="font-semibold mb-1">Debug session</div>
+            <div>Clerk user: {debugSession.clerkUserId}</div>
+            <div>Tenant row exists: {debugSession.hasTenant ? "yes" : "no"}</div>
+            {debugSession.tenant && <div>Tenant email: {debugSession.tenant.email}</div>}
           </div>
         )}
 

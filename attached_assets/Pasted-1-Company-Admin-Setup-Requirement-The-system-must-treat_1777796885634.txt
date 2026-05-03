@@ -1,0 +1,127 @@
+1. Company Admin Setup
+
+Requirement:
+The system must treat the initial account as a Company Admin with full access to manage users, APIs, billing, and system configurations.
+
+Validation Check:
+
+Admin can create/edit/delete users
+Admin can assign plans and providers
+2. User Self-Onboarding with KYC
+
+Requirement:
+The system must allow users to self-register and complete KYC as either:
+
+Individual (Aadhaar-based)
+Business (GST-based)
+
+Validation Check:
+
+User can select KYC type
+KYC status is tracked (Pending / Verified / Rejected)
+3. Provider Selection Logic (Twilio / Sarvam)
+
+Requirement:
+The system must dynamically assign a calling provider:
+
+Use Twilio if available without KYC restrictions
+Else allow users to connect their own Twilio account
+Otherwise fallback to Sarvam integration
+
+Validation Check:
+
+Provider is selected automatically based on conditions
+Calls are routed correctly via selected provider
+4. Sarvam API Access Control
+
+Requirement:
+The Company Admin must be able to limit and assign Sarvam API usage to a specific number of users.
+
+Validation Check:
+
+Admin can define user limits
+Only assigned users can access Sarvam APIs
+5. Call Outcome Tracking
+
+Requirement:
+Each call must store one of the following outcomes:
+
+Interested (with follow-up date, time, and notes)
+Not Interested
+No Response
+
+Validation Check:
+
+Call cannot be saved without selecting an outcome
+Additional fields required for “Interested”
+6. Subscription Plan & Billing
+
+Requirement:
+The system must support a subscription plan of ₹2000/month including free call minutes, with additional minutes billed separately.
+
+Validation Check:
+
+Monthly subscription is active
+Minutes are deducted per call
+Extra usage is charged correctly
+7. Admin Login as User (Magic Link)
+
+Requirement:
+The Company Admin must be able to log into any user account using a secure, time-limited magic link.
+
+Validation Check:
+
+Magic link expires after defined time
+Admin access is logged for audit
+8. Agentic Operations (AI Automation)
+
+Requirement:
+The system must support AI-driven automation for:
+
+Call summaries
+Lead qualification
+Support assistance
+
+Validation Check:
+
+AI generates outputs after events (e.g., call end)
+Outputs are stored and accessible
+9. Basic Reports
+
+Requirement:
+The system must provide basic reporting dashboards including:
+
+Total calls
+Call outcomes
+Conversion rate
+Usage metrics
+
+Validation Check:
+
+Data reflects real-time or near real-time values
+Filters (date/user) are functional
+10. Authentication System
+
+Requirement:
+The system must support authentication via:
+
+Google login
+Microsoft login
+Email/password
+
+Validation Check:
+
+Users can login via all methods
+JWT/session is handled securely
+11. Payment Integration (Razorpay)
+
+Requirement:
+The system must integrate with Razorpay for:
+
+Subscription payments
+Additional minute purchases
+
+Validation Check:
+
+Payments are recorded via webhook
+Subscription status updates correctly

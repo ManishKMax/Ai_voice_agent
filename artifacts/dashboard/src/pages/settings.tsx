@@ -250,6 +250,8 @@ export default function Settings() {
   const [emailTestStatus, setEmailTestStatus] = useState<ConnectionStatus>("idle");
   const [emailTestMessage, setEmailTestMessage] = useState("");
   const [emailTestRecipient, setEmailTestRecipient] = useState("");
+  const [lowBalanceTestStatus, setLowBalanceTestStatus] = useState<ConnectionStatus>("idle");
+  const [lowBalanceTestMessage, setLowBalanceTestMessage] = useState("");
 
   const [webhookInfo, setWebhookInfo] = useState<WebhookInfo | null>(null);
   const [twilioNumbers, setTwilioNumbers] = useState<{ phoneNumber: string; friendlyName: string }[]>([]);
@@ -396,6 +398,18 @@ export default function Settings() {
     });
     setEmailTestStatus(res.success ? "ok" : "error");
     setEmailTestMessage(res.message ?? "");
+  }
+
+  async function handleTestLowBalanceEmail() {
+    if (!emailTestRecipient) return;
+    setLowBalanceTestStatus("testing");
+    setLowBalanceTestMessage("");
+    const res = await apiFetch("/api/settings/test-low-balance-email", {
+      method: "POST",
+      body: JSON.stringify({ to: emailTestRecipient }),
+    });
+    setLowBalanceTestStatus(res.success ? "ok" : "error");
+    setLowBalanceTestMessage(res.message ?? "");
   }
 
   async function loadTwilioNumbers() {
@@ -806,7 +820,7 @@ export default function Settings() {
             </div>
             <div>
               <h2 className="font-semibold text-foreground">Email Notifications</h2>
-              <p className="text-xs text-muted-foreground">Send tenants an email when their KYC is approved or rejected</p>
+              <p className="text-xs text-muted-foreground">KYC decision emails and low-balance alerts for tenants</p>
             </div>
           </div>
           <StatusBadge status={emailTestStatus} connected={currentStatus.smtpConfigured} />
@@ -883,7 +897,7 @@ export default function Settings() {
 
           <div className="rounded-md border border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/30 p-3 text-sm text-sky-700 dark:text-sky-300 flex items-start gap-2">
             <Mail className="h-4 w-4 mt-0.5 flex-shrink-0" />
-            <span>Once configured, tenants will automatically receive a branded email when you approve or reject their KYC submission from the tenant list.</span>
+            <span>Tenants automatically receive emails when you approve or reject their KYC, and when their minutes balance drops below 30 or hits zero.</span>
           </div>
 
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 pt-1 border-t border-border">
@@ -897,22 +911,35 @@ export default function Settings() {
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring placeholder:text-muted-foreground"
               />
             </div>
-            <div className="flex items-center gap-3 sm:mt-5">
+            <div className="flex flex-wrap items-center gap-3 sm:mt-5">
               <button
                 onClick={handleTestEmail}
                 disabled={emailTestStatus === "testing" || !emailTestRecipient}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border text-sm hover:bg-accent disabled:opacity-60 transition-colors whitespace-nowrap"
               >
                 {emailTestStatus === "testing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-                Send Test
+                Test KYC Email
               </button>
-              {emailTestMessage && (
-                <p className={`text-sm ${emailTestStatus === "ok" ? "text-green-600" : "text-red-500"}`}>
-                  {emailTestMessage}
-                </p>
-              )}
+              <button
+                onClick={handleTestLowBalanceEmail}
+                disabled={lowBalanceTestStatus === "testing" || !emailTestRecipient}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400 text-sm hover:bg-amber-50 dark:hover:bg-amber-950/30 disabled:opacity-60 transition-colors whitespace-nowrap"
+              >
+                {lowBalanceTestStatus === "testing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                Test Low-Balance Alert
+              </button>
             </div>
           </div>
+          {(emailTestMessage || lowBalanceTestMessage) && (
+            <div className="space-y-1">
+              {emailTestMessage && (
+                <p className={`text-sm ${emailTestStatus === "ok" ? "text-green-600" : "text-red-500"}`}>{emailTestMessage}</p>
+              )}
+              {lowBalanceTestMessage && (
+                <p className={`text-sm ${lowBalanceTestStatus === "ok" ? "text-green-600" : "text-red-500"}`}>{lowBalanceTestMessage}</p>
+              )}
+            </div>
+          )}
         </div>
       </section>
 

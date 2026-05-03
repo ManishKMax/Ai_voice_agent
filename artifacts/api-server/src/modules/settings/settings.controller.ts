@@ -11,7 +11,7 @@ import {
   platformSettings,
 } from "../../config/platform.config.js";
 import { hashApiKey } from "../../middlewares/apikey.js";
-import { sendTestEmail } from "../../services/email.service.js";
+import { sendTestEmail, sendLowBalanceEmail } from "../../services/email.service.js";
 
 export async function getSettings(req: Request, res: Response, next: NextFunction) {
   try {
@@ -229,6 +229,21 @@ export async function testEmail(req: Request, res: Response, next: NextFunction)
     res.json({ success: true, message: `Test email sent to ${to}` });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Failed to send test email";
+    res.status(400).json({ success: false, message: msg });
+  }
+}
+
+export async function testLowBalanceEmail(req: Request, res: Response, next: NextFunction) {
+  try {
+    const to = req.body.to as string | undefined;
+    if (!to || !to.includes("@")) {
+      res.status(400).json({ success: false, message: "A valid recipient email address is required" });
+      return;
+    }
+    await sendLowBalanceEmail(to, "Test Tenant", 12);
+    res.json({ success: true, message: `Low-balance alert email sent to ${to}` });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Failed to send low-balance alert email";
     res.status(400).json({ success: false, message: msg });
   }
 }

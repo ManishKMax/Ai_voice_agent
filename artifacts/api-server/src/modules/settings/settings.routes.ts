@@ -9,6 +9,7 @@ import {
   getWebhookInfo,
   testWebhook,
   testEmail,
+  testLowBalanceEmail,
   listApiKeys,
   createApiKey,
   deleteApiKey,
@@ -24,6 +25,7 @@ router.get("/settings/twilio-numbers", requireAuth, getTwilioNumbers);
 router.get("/settings/webhook-info", requireAuth, getWebhookInfo);
 router.post("/settings/test-webhook", requireAuth, testWebhook);
 router.post("/settings/test-email", requireAuth, testEmail);
+router.post("/settings/test-low-balance-email", requireAuth, testLowBalanceEmail);
 
 router.get("/settings/api-keys", requireAuth, listApiKeys);
 router.post("/settings/api-keys", requireAuth, createApiKey);

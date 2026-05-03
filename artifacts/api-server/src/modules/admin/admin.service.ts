@@ -1,6 +1,6 @@
 import { db, tenantsTable, kycDocumentsTable } from "@workspace/db";
 import { eq, desc, sql } from "drizzle-orm";
-import { sendKycDecisionEmail } from "../../services/email.service.js";
+import { sendKycDecisionEmail, sendLowBalanceEmail, LOW_BALANCE_THRESHOLD } from "../../services/email.service.js";
 
 export async function listTenantsWithKyc() {
   const tenants = await db
@@ -47,6 +47,14 @@ export async function getTenantWithKyc(tenantId: number) {
 }
 
 export async function adjustMinutes(tenantId: number, delta: number) {
+  const before = await db
+    .select({ minutesBalance: tenantsTable.minutesBalance, email: tenantsTable.email, name: tenantsTable.name })
+    .from(tenantsTable)
+    .where(eq(tenantsTable.id, tenantId))
+    .limit(1);
+
+  const oldBalance = before[0]?.minutesBalance ?? 0;
+
   const rows = await db
     .update(tenantsTable)
     .set({
@@ -56,7 +64,18 @@ export async function adjustMinutes(tenantId: number, delta: number) {
     .where(eq(tenantsTable.id, tenantId))
     .returning({ minutesBalance: tenantsTable.minutesBalance });
 
-  return rows[0]?.minutesBalance ?? 0;
+  const newBalance = rows[0]?.minutesBalance ?? 0;
+
+  if (before[0] && delta < 0) {
+    const { email, name } = before[0];
+    const crossedEmpty = oldBalance > 0 && newBalance === 0;
+    const crossedLow = !crossedEmpty && oldBalance >= LOW_BALANCE_THRESHOLD && newBalance < LOW_BALANCE_THRESHOLD;
+    if (crossedEmpty || crossedLow) {
+      sendLowBalanceEmail(email, name, newBalance).catch(() => {});
+    }
+  }
+
+  return newBalance;
 }
 
 export async function updateTenantKyc(

@@ -87,7 +87,7 @@ export async function generateConversationResponse(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${config.sarvam.apiKey}`,
+        "api-subscription-key": config.sarvam.apiKey,
       },
       body: JSON.stringify({
         model: CHAT_MODEL_CONVERSATION,
@@ -180,7 +180,7 @@ Respond with exactly this JSON (no markdown, no extra text):
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${config.sarvam.apiKey}`,
+        "api-subscription-key": config.sarvam.apiKey,
       },
       body: JSON.stringify({
         model: CHAT_MODEL_ANALYSIS,

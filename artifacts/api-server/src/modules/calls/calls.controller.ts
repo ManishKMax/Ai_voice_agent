@@ -202,14 +202,20 @@ export async function voiceGatherWebhook(req: Request, res: Response): Promise<v
   const turn = parseInt(q.turn ?? "0");
 
   const speechResult = body.SpeechResult ?? "";
+  const dtmfDigits = body.Digits ?? "";
   const confidence = parseFloat(body.Confidence ?? "0");
 
-  logger.info({ leadId, callSid, turn, speechResult, confidence }, "Gather webhook received");
+  // If the caller pressed DTMF instead of speaking, treat the key press as a
+  // "yes/hello" signal so the conversation can still begin through Sarvam.
+  const effectiveSpeech = speechResult.trim()
+    || (dtmfDigits ? `[pressed ${dtmfDigits}]` : "");
+
+  logger.info({ leadId, callSid, turn, speechResult, dtmfDigits, confidence }, "Gather webhook received");
 
   try {
-    // No speech detected — re-prompt using Polly (instant, no TTS API needed)
-    if (!speechResult.trim()) {
-      logger.info({ leadId, callSid, turn }, "No speech detected — re-prompting");
+    // No speech AND no DTMF detected — re-prompt using Polly (instant, no TTS API needed)
+    if (!effectiveSpeech) {
+      logger.info({ leadId, callSid, turn }, "No speech or DTMF detected — re-prompting");
       if (turn >= 2) {
         xmlResponse(res, generateSayTwiML(
           "I'm sorry I couldn't hear you. I'll try reaching you another time. Have a great day!",
@@ -230,7 +236,7 @@ export async function voiceGatherWebhook(req: Request, res: Response): Promise<v
     jobs.set(jobId, job);
 
     // Fire-and-forget — voiceRespondWebhook will pick up the result
-    processConversationJob(jobId, speechResult).catch(err => {
+    processConversationJob(jobId, effectiveSpeech).catch(err => {
       logger.error({ err, jobId }, "processConversationJob unhandled rejection");
       jobs.set(jobId, { ...job, status: "error" });
     });

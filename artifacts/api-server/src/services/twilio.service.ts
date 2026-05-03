@@ -57,9 +57,9 @@ export function generateInitialTwiML(
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Gather input="speech" action="${gatherAction}" method="POST"
+  <Gather input="speech dtmf" action="${gatherAction}" method="POST"
           language="${language}" speechTimeout="auto" timeout="15"
-          maxSpeechTime="15">
+          maxSpeechTime="15" finishOnKey="">
     <Play>${audioUrl}</Play>
   </Gather>
   <Hangup/>
@@ -99,9 +99,9 @@ export function generateRespondTwiML(
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Gather input="speech" action="${gatherAction}" method="POST"
+  <Gather input="speech dtmf" action="${gatherAction}" method="POST"
           language="${language}" speechTimeout="auto" timeout="15"
-          maxSpeechTime="15">
+          maxSpeechTime="15" finishOnKey="">
     <Play>${audioUrl}</Play>
   </Gather>
   <Hangup/>
@@ -147,9 +147,9 @@ export function generateSayTwiML(
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Gather input="speech" action="${gatherAction}" method="POST"
+  <Gather input="speech dtmf" action="${gatherAction}" method="POST"
           language="${language}" speechTimeout="auto" timeout="15"
-          maxSpeechTime="15">
+          maxSpeechTime="15" finishOnKey="">
     <Say voice="${voice}" language="${language}">${escapeXml(text)}</Say>
   </Gather>
   <Hangup/>

@@ -2,6 +2,8 @@ import { Router } from "express";
 import { getAuth } from "@clerk/express";
 import { getOrCreateTenant, getPricingConfig, submitKycDocument, getPortalUsage, getPortalUsageMonths, getPortalUsageForMonth } from "./portal.service.js";
 import { ObjectStorageService } from "../../lib/objectStorage.js";
+import { logger } from "../../lib/logger.js";
+import { getTenantByClerkId } from "./portal.service.js";
 
 const router = Router();
 const objectStorageService = new ObjectStorageService();
@@ -54,6 +56,22 @@ router.get("/me", requireClerkAuth, async (req: any, res, next) => {
         monthlyMinutesQuota: pricing.monthlyMinutesQuota,
         trialCallsLimit: pricing.trialCallsLimit,
       },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/debug/session", requireClerkAuth, async (req: any, res, next) => {
+  try {
+    const { clerkUserId } = req;
+    const tenant = await getTenantByClerkId(clerkUserId);
+    res.json({
+      clerkUserId,
+      hasTenant: !!tenant,
+      tenant: tenant
+        ? { id: tenant.id, name: tenant.name, email: tenant.email, createdAt: tenant.createdAt }
+        : null,
     });
   } catch (err) {
     next(err);

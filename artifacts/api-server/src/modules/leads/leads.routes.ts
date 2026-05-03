@@ -12,6 +12,7 @@ import {
   patchLead,
   removeLead,
   bulkAction,
+  retryCall,
 } from "./leads.controller.js";
 
 const router = Router();
@@ -38,5 +39,6 @@ router.get("/leads/export", authMiddleware, exportLeads);
 router.get("/leads/:id", authMiddleware, getLead);
 router.patch("/leads/:id", authMiddleware, patchLead);
 router.delete("/leads/:id", authMiddleware, removeLead);
+router.post("/leads/:id/retry-call", authMiddleware, retryCall);
 
 export default router;

@@ -48,9 +48,18 @@ export async function triggerCallForLead(leadId: number): Promise<void> {
     const twilioCode = (err as Record<string, unknown>)?.code as number | undefined;
 
     if (twilioCode === 21219) {
-      logger.warn({ leadId, callDbId: call.id }, "Twilio error 21219: unverified destination — marking lead no_response permanently");
+      logger.warn({ leadId, callDbId: call.id }, "Twilio error 21219: unverified destination — resetting lead to pending for retry");
       await db.delete(callsTable).where(eq(callsTable.id, call.id));
-      await updateLeadStatus(leadId, "no_response");
+      // Reset to pending (not permanent no_response) so admin can retry
+      // after verifying the number in Twilio console
+      await db
+        .update(leadsTable)
+        .set({
+          status: "pending",
+          notes: "Call blocked: phone number not verified in Twilio trial account. Verify at twilio.com/console then click Retry Call.",
+          updatedAt: new Date(),
+        })
+        .where(eq(leadsTable.id, leadId));
       dequeueLeadJobs(leadId);
       return;
     }

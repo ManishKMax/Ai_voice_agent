@@ -14,7 +14,7 @@ import { format } from "date-fns";
 import {
   Plus, Search, Filter, Download, Upload, Phone, Eye,
   Pencil, Trash2, RotateCcw, ChevronDown, X, CheckSquare,
-  Square, AlertTriangle, PhoneOff, Tag,
+  Square, AlertTriangle, PhoneOff, Tag, RefreshCw, Loader2,
 } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -254,6 +254,28 @@ export default function Leads() {
         onError: (err: any) => toast({ title: "Failed to update lead", description: err?.response?.data?.error, variant: "destructive" }),
       }
     );
+  }
+
+  // ── Retry Call
+  const [retryingId, setRetryingId] = useState<number | null>(null);
+  async function handleRetryCall(leadId: number) {
+    setRetryingId(leadId);
+    try {
+      const token = localStorage.getItem("auth_token");
+      const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, "");
+      const res = await fetch(`${baseUrl}/api/leads/${leadId}/retry-call`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      toast({ title: "Call queued", description: "Lead reset to pending and queued for calling." });
+      invalidate();
+    } catch (err: any) {
+      toast({ title: "Retry failed", description: err?.message, variant: "destructive" });
+    } finally {
+      setRetryingId(null);
+    }
   }
 
   // ── Status inline change
@@ -544,11 +566,26 @@ export default function Leads() {
                       <Button variant="ghost" size="icon" className="h-7 w-7" title="Edit" onClick={() => openEdit(lead)}>
                         <Pencil className="h-3.5 w-3.5" />
                       </Button>
-                      <Link href={`/leads/${lead.id}?call=true`}>
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-blue-600 hover:text-blue-700 hover:bg-blue-50" title="Call">
-                          <Phone className="h-3.5 w-3.5" />
+                      {lead.status !== "pending" && lead.status !== "calling" && !lead.dnc ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-green-600 hover:text-green-700 hover:bg-green-50"
+                          title="Retry Call"
+                          disabled={retryingId === lead.id}
+                          onClick={() => handleRetryCall(lead.id)}
+                        >
+                          {retryingId === lead.id
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            : <RefreshCw className="h-3.5 w-3.5" />}
                         </Button>
-                      </Link>
+                      ) : (
+                        <Link href={`/leads/${lead.id}?call=true`}>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-blue-600 hover:text-blue-700 hover:bg-blue-50" title="Call">
+                            <Phone className="h-3.5 w-3.5" />
+                          </Button>
+                        </Link>
+                      )}
                       <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10" title="Delete" onClick={() => confirmDelete([lead.id])}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>

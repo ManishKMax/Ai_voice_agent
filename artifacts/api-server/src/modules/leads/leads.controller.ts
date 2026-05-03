@@ -9,6 +9,7 @@ import {
   updateLead,
   deleteLead,
   bulkLeadAction,
+  retryCallForLead,
 } from "./leads.service.js";
 import { parse } from "csv-parse/sync";
 import type { InsertLead, LeadStatus, LeadPriority } from "@workspace/db/schema";
@@ -233,6 +234,19 @@ export async function bulkAction(req: AuthRequest, res: Response): Promise<void>
     res.json({ message: `${action} applied to ${result.count} leads`, count: result.count });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Bulk action failed";
+    res.status(500).json({ error: msg });
+  }
+}
+
+export async function retryCall(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    const id = parseInt(req.params.id as string);
+    if (!id || isNaN(id)) { res.status(400).json({ error: "Valid lead id required" }); return; }
+    const result = await retryCallForLead(id);
+    if (!result.queued) { res.status(400).json({ error: result.reason }); return; }
+    res.json({ message: "Lead re-queued for calling" });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Retry failed";
     res.status(500).json({ error: msg });
   }
 }

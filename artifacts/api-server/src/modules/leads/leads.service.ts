@@ -6,6 +6,27 @@ import { logger } from "../../lib/logger.js";
 import { fireWebhook, shouldFireWebhook, statusToEvent } from "../../services/webhook.service.js";
 import { broadcastSse } from "../../services/sse.service.js";
 
+export async function retryCallForLead(leadId: number): Promise<{ queued: boolean; reason?: string }> {
+  const [lead] = await db
+    .select()
+    .from(leadsTable)
+    .where(eq(leadsTable.id, leadId))
+    .limit(1);
+
+  if (!lead) return { queued: false, reason: "Lead not found" };
+  if (lead.dnc) return { queued: false, reason: "Lead is on DNC list" };
+  if (lead.status === "calling") return { queued: false, reason: "Call already in progress" };
+
+  await db
+    .update(leadsTable)
+    .set({ status: "pending", retryCount: "0", updatedAt: new Date() })
+    .where(eq(leadsTable.id, leadId));
+
+  enqueueLead(leadId, 0, lead.priority ?? 2);
+  logger.info({ leadId }, "Lead reset to pending and re-enqueued via retry");
+  return { queued: true };
+}
+
 export async function createLead(data: InsertLead) {
   const [lead] = await db.insert(leadsTable).values(data as typeof leadsTable.$inferInsert).returning();
   enqueueLead(lead.id, 0, lead.priority);

@@ -17,6 +17,7 @@ import Calls from "@/pages/calls";
 import AgentSettings from "@/pages/agent";
 import Settings from "@/pages/settings";
 import Leaderboard from "@/pages/leaderboard";
+import KycReview from "@/pages/kyc";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -46,6 +47,7 @@ const ProtectedCalls = () => <ProtectedRoute component={Calls} />;
 const ProtectedAgentSettings = () => <ProtectedRoute component={AgentSettings} />;
 const ProtectedSettings = () => <ProtectedRoute component={Settings} />;
 const ProtectedLeaderboard = () => <ProtectedRoute component={Leaderboard} />;
+const ProtectedKycReview = () => <ProtectedRoute component={KycReview} />;
 
 function Router() {
   return (
@@ -60,6 +62,7 @@ function Router() {
       <Route path="/agent" component={ProtectedAgentSettings} />
       <Route path="/settings" component={ProtectedSettings} />
       <Route path="/leaderboard" component={ProtectedLeaderboard} />
+      <Route path="/kyc" component={ProtectedKycReview} />
       <Route component={NotFound} />
     </Switch>
   );

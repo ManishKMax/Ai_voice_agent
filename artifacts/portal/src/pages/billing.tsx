@@ -12,12 +12,11 @@ const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 async function parseJsonOrThrow(res: Response) {
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
-    const text = await res.text();
-    throw new Error(text.includes("<html") || text.includes("<!DOCTYPE")
-      ? "Your session expired. Please sign in again."
-      : text || "Unexpected response from server");
+    throw new Error("Your session expired. Please sign in again.");
   }
-  return res.json();
+  return res.json().catch(() => {
+    throw new Error("Unexpected response from server");
+  });
 }
 
 async function fetchPortalMe() {

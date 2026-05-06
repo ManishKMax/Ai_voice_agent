@@ -27,6 +27,20 @@ const objectStorageService = new ObjectStorageService();
 const requireClerkAuth = (req: any, res: any, next: any) => {
   const auth = getAuth(req);
   if (!auth?.userId) {
+    const authHeader = req.headers.authorization || "";
+    const hasBearer = authHeader.toLowerCase().startsWith("bearer ");
+    const tokenPreview = hasBearer ? authHeader.slice(7, 27) + "..." : "(none)";
+    logger.warn({
+      path: req.path,
+      hasAuthHeader: !!authHeader,
+      hasBearer,
+      tokenPreview,
+      authReason: (auth as any)?.reason,
+      authMessage: (auth as any)?.message,
+      authState: (auth as any)?.sessionClaims ? "has-claims" : "no-claims",
+      host: req.headers.host,
+      origin: req.headers.origin,
+    }, "Clerk auth rejected on portal route");
     return res.status(401).json({ error: "Unauthorized" });
   }
   (req as any).clerkUserId = auth.userId;

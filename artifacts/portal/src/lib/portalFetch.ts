@@ -1,9 +1,7 @@
-const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
-
 async function parseJsonOrThrow(res: Response) {
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
-    throw new Error("Your session expired. Please sign in again.");
+    throw new Error("Unexpected response from server (not JSON)");
   }
   return res.json().catch(() => {
     throw new Error("Unexpected response from server");
@@ -23,7 +21,9 @@ export async function portalFetch(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${basePath}${path}`, {
+  // API routes are absolute (`/api/...`) — they go through the global proxy
+  // to the api-server, NOT through the portal's `/portal/` base path.
+  const res = await fetch(path, {
     ...opts,
     credentials: "include",
     headers,

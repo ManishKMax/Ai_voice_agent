@@ -49,7 +49,7 @@ export function useCallStatusSSE(
 
     function connect() {
       if (destroyed) return;
-      es = new EventSource(`${basePath}/api/sse/events`);
+      es = new EventSource(`/api/sse/events`);
 
       const EVENTS: SseCallEvent[] = ["call.started", "call.ended", "call.turn", "call.status"];
       for (const evt of EVENTS) {

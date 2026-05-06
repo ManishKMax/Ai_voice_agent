@@ -38,7 +38,7 @@ export default function KycUpload() {
   const gstInputRef = useRef<HTMLInputElement>(null);
 
   const { uploadFile: uploadFileHook } = useUpload({
-    basePath: `${basePath}/api/storage`,
+    basePath: `/api/storage`,
   });
 
   async function handleFileSelect(

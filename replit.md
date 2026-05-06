@@ -24,7 +24,7 @@ A production-ready AI-powered outbound call system with two products:
 - **Voice**: Twilio Programmable Voice (Gather + Play)
 - **AI TTS**: Sarvam AI Bulbul v3 (`bulbul:v3`) — Indian-accent voice synthesis
 - **AI STT**: Twilio built-in speech recognition (Gather input="speech")
-- **AI Chat**: Sarvam AI `sarvam-105b` — 105B flagship model for conversation + analysis
+- **AI Chat**: Sarvam AI `sarvam-m` (24B, ~1-2s, default for live conversation) + `sarvam-105b` (post-call analysis). Override via `SARVAM_CHAT_MODEL` / `SARVAM_ANALYSIS_MODEL`.
 - **Frontend**: React + Vite + TailwindCSS + shadcn/ui
 
 ## Artifacts
@@ -212,5 +212,5 @@ Test lead 13: `yk` at `+919078802278` (verified Twilio trial destination)
 - Twilio signature validation is **skipped** in `NODE_ENV=development`
 - Audio files served at `/api/voice/audio/:id` expire after 10 minutes
 - Conversation sessions (in-memory) expire after 30 minutes
-- `sarvam-105b` requires `max_tokens: 2000` due to thinking mode
+- `sarvam-105b` requires `max_tokens: 2000` due to thinking mode (8-14s/turn — too slow for live voice). `sarvam-m` is the default conversation model and uses 300 tokens.
 - DB push interactive prompts: use `echo "" | pnpm --filter @workspace/db run push` or create tables directly via SQL

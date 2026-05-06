@@ -6,8 +6,16 @@ import type { ConversationMessage } from "./conversation-state.js";
 const STT_URL = "https://api.sarvam.ai/speech-to-text";
 const TTS_URL = "https://api.sarvam.ai/text-to-speech";
 const CHAT_URL = "https://api.sarvam.ai/v1/chat/completions";
-const CHAT_MODEL_CONVERSATION = "sarvam-105b";
-const CHAT_MODEL_ANALYSIS = "sarvam-105b";
+// Conversation model: default to `sarvam-m` (24B, no thinking, ~1-2s response).
+// `sarvam-105b` is a thinking model that takes 8-14s per turn — too slow for
+// real-time voice. Override with SARVAM_CHAT_MODEL if you want to experiment.
+const CHAT_MODEL_CONVERSATION = process.env.SARVAM_CHAT_MODEL ?? "sarvam-m";
+// Analysis runs after the call ends, so latency is fine — keep the smarter model.
+const CHAT_MODEL_ANALYSIS = process.env.SARVAM_ANALYSIS_MODEL ?? "sarvam-105b";
+// Conversation replies should be 1-2 sentences, so 300 tokens is plenty.
+// `sarvam-105b` thinking mode needs 2000; the fast model only needs ~300.
+const CHAT_MAX_TOKENS_CONVERSATION =
+  CHAT_MODEL_CONVERSATION === "sarvam-105b" ? 2000 : 300;
 const TTS_MODEL = "bulbul:v3";
 const STT_MODEL = "saaras:v3";
 
@@ -93,7 +101,7 @@ export async function generateConversationResponse(
         model: CHAT_MODEL_CONVERSATION,
         messages: fullMessages,
         temperature: 0.7,
-        max_tokens: 2000,
+        max_tokens: CHAT_MAX_TOKENS_CONVERSATION,
       }),
     });
 

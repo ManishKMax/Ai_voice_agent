@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authMiddleware } from "../../middlewares/auth.js";
+import { authMiddleware, requireRole } from "../../middlewares/auth.js";
 import { db } from "@workspace/db";
 import {
   leadsTable,
@@ -11,7 +11,7 @@ import { sql, desc, and, gte, eq } from "drizzle-orm";
 
 const router = Router();
 
-router.get("/reports/overview", authMiddleware, async (_req, res, next): Promise<void> => {
+router.get("/reports/overview", authMiddleware, requireRole("COMPANY_ADMIN", "SUPER_ADMIN"), async (_req, res, next): Promise<void> => {
   try {
     const [leadsStats, durationStats, outcomeStats] = await Promise.all([
       db
@@ -121,7 +121,7 @@ router.get("/reports/overview", authMiddleware, async (_req, res, next): Promise
   }
 });
 
-router.get("/reports/tenant/:tenantId", authMiddleware, async (req, res, next): Promise<void> => {
+router.get("/reports/tenant/:tenantId", authMiddleware, requireRole("COMPANY_ADMIN", "SUPER_ADMIN"), async (req, res, next): Promise<void> => {
   try {
     const tenantId = parseInt(req.params["tenantId"] as string, 10);
     if (isNaN(tenantId)) { res.status(400).json({ error: "Invalid tenant ID" }); return; }

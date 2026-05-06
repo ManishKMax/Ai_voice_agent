@@ -12,10 +12,14 @@ const CHAT_URL = "https://api.sarvam.ai/v1/chat/completions";
 const CHAT_MODEL_CONVERSATION = process.env.SARVAM_CHAT_MODEL ?? "sarvam-m";
 // Analysis runs after the call ends, so latency is fine — keep the smarter model.
 const CHAT_MODEL_ANALYSIS = process.env.SARVAM_ANALYSIS_MODEL ?? "sarvam-105b";
-// Conversation replies should be 1-2 sentences, so 300 tokens is plenty.
-// `sarvam-105b` thinking mode needs 2000; the fast model only needs ~300.
-const CHAT_MAX_TOKENS_CONVERSATION =
-  CHAT_MODEL_CONVERSATION === "sarvam-105b" ? 2000 : 300;
+// Both `sarvam-m` and `sarvam-105b` are reasoning models that emit a
+// <think>...</think> block before the actual reply (verified May 2026 — no
+// API switch can disable it). The thinking block alone commonly consumes
+// 200-500 tokens, so 300 max_tokens leaves nothing for the spoken reply
+// (finish_reason=length, content stuck inside <think>). 1500 gives the model
+// room to think *and* answer; we still strip the <think> block via
+// stripThinking() and truncate to 480 chars before TTS.
+const CHAT_MAX_TOKENS_CONVERSATION = 1500;
 const TTS_MODEL = "bulbul:v3";
 const STT_MODEL = "saaras:v3";
 
@@ -27,6 +31,21 @@ function sarvamHeaders(): Record<string, string> {
 // room for preprocessing expansion (numbers → words, etc.) and break at a
 // sentence/clause boundary so speech doesn't cut mid-word.
 const TTS_MAX_CHARS = 480;
+
+// Sarvam-m (and 105b) are reasoning models that wrap their internal thought
+// process in <think>...</think> tags inside `message.content`. There is no
+// API switch to disable this (verified against /v1/chat/completions May 2026);
+// we must strip the block before speaking the reply, or the agent literally
+// reads its own reasoning aloud. Handles both closed and unclosed (truncated)
+// think blocks.
+export function stripThinking(text: string): string {
+  let out = text.replace(/<think>[\s\S]*?<\/think>\s*/gi, "");
+  // If the reply was truncated mid-thought (finish_reason=length), there's
+  // an opening <think> with no closer — drop everything after it.
+  const openIdx = out.search(/<think>/i);
+  if (openIdx !== -1) out = out.slice(0, openIdx);
+  return out.trim();
+}
 
 export function truncateForTTS(text: string, maxChars = TTS_MAX_CHARS): string {
   const t = text.trim();
@@ -78,7 +97,10 @@ export async function generateSpeech(
         ...sarvamHeaders(),
       },
       body: JSON.stringify({
-        inputs: [safeText],
+        // Sarvam deprecated the `inputs: [string]` array form (May 2026) in
+        // favour of a single `text` string. Old form still works but logs a
+        // deprecation warning on every call — use the new field.
+        text: safeText,
         target_language_code: cfg.language,
         speaker: cfg.voice,
         model: TTS_MODEL,
@@ -146,12 +168,29 @@ export async function generateConversationResponse(
     }
 
     const data = (await response.json()) as {
-      choices: Array<{ message: { content: string } }>;
+      choices: Array<{
+        message: { content: string };
+        finish_reason?: string;
+      }>;
     };
 
-    const raw = data.choices[0]?.message?.content?.trim() ?? "";
-    const shouldEnd = raw.startsWith("[DONE]");
-    const text = raw.replace(/^\[DONE\]\s*/i, "").trim();
+    const raw = data.choices[0]?.message?.content ?? "";
+    // Strip <think>...</think> reasoning blocks before doing anything else —
+    // sarvam-m always emits them and they must NEVER reach TTS.
+    const cleaned = stripThinking(raw);
+    const shouldEnd = cleaned.startsWith("[DONE]");
+    const text = cleaned.replace(/^\[DONE\]\s*/i, "").trim();
+
+    if (!text) {
+      logger.warn(
+        {
+          rawLength: raw.length,
+          finishReason: data.choices[0]?.finish_reason,
+          rawPreview: raw.slice(0, 200),
+        },
+        "Sarvam chat returned empty content after stripping <think> — falling back to goodbye",
+      );
+    }
 
     return { text: text || "Thank you for your time. Goodbye!", shouldEnd };
   } catch (err) {
@@ -238,7 +277,9 @@ Respond with exactly this JSON (no markdown, no extra text):
       choices: Array<{ message: { content: string } }>;
     };
     const content = data.choices[0]?.message?.content ?? "{}";
-    const parsed = JSON.parse(content.replace(/```json|```/g, "").trim());
+    // Strip <think> blocks first (sarvam-105b emits them too) then code fences.
+    const cleaned = stripThinking(content).replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(cleaned || "{}");
 
     return {
       interest: parsed.interest ?? "low",

@@ -73,16 +73,20 @@ export function generateInitialTwiML(
     `${config.baseUrl}/api/voice/gather?leadId=${leadId}&turn=0`
   );
 
+  // CRITICAL: actionOnEmptyResult="true" so the gather webhook is invoked
+  // even when the caller stays silent past the timeout. Without it, Twilio
+  // silently falls through to the next verb (which used to be <Hangup/>),
+  // cutting the call instead of giving us a chance to re-prompt.
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Gather input="speech dtmf" action="${gatherAction}" method="POST"
-          language="${language}" speechTimeout="auto" timeout="15"
-          maxSpeechTime="15" finishOnKey=""
+          language="${language}" speechTimeout="auto" timeout="10"
+          maxSpeechTime="20" finishOnKey=""
           speechModel="phone_call" enhanced="true"
+          actionOnEmptyResult="true"
           hints="${SPEECH_HINTS}">
     <Play>${audioUrl}</Play>
   </Gather>
-  <Hangup/>
 </Response>`;
 }
 
@@ -120,13 +124,13 @@ export function generateRespondTwiML(
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Gather input="speech dtmf" action="${gatherAction}" method="POST"
-          language="${language}" speechTimeout="auto" timeout="15"
-          maxSpeechTime="15" finishOnKey=""
+          language="${language}" speechTimeout="auto" timeout="10"
+          maxSpeechTime="20" finishOnKey=""
           speechModel="phone_call" enhanced="true"
+          actionOnEmptyResult="true"
           hints="${SPEECH_HINTS}">
     <Play>${audioUrl}</Play>
   </Gather>
-  <Hangup/>
 </Response>`;
 }
 
@@ -170,13 +174,13 @@ export function generateSayTwiML(
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Gather input="speech dtmf" action="${gatherAction}" method="POST"
-          language="${language}" speechTimeout="auto" timeout="15"
-          maxSpeechTime="15" finishOnKey=""
+          language="${language}" speechTimeout="auto" timeout="10"
+          maxSpeechTime="20" finishOnKey=""
           speechModel="phone_call" enhanced="true"
+          actionOnEmptyResult="true"
           hints="${SPEECH_HINTS}">
     <Say voice="${voice}" language="${language}">${escapeXml(text)}</Say>
   </Gather>
-  <Hangup/>
 </Response>`;
 }
 

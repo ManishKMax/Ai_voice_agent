@@ -35,6 +35,9 @@ interface PendingGreeting {
   created: number;
 }
 
+// 2-hour TTL so greetings prewarmed at lead-creation time still hit
+// even if the call is delayed by queue/retry. Buffers are small (~20-50KB).
+const PENDING_GREETING_TTL_MS = 2 * 60 * 60 * 1000;
 const pendingGreetings = new Map<number, PendingGreeting>();
 
 export function setPendingGreeting(
@@ -43,13 +46,17 @@ export function setPendingGreeting(
   promise: Promise<string | null>,
 ): void {
   pendingGreetings.set(leadId, { text, promise, created: Date.now() });
-  // TTL — clean up after 5 minutes regardless of consumption
   setTimeout(() => {
     const entry = pendingGreetings.get(leadId);
-    if (entry && entry.created < Date.now() - 5 * 60 * 1000) {
+    if (entry && entry.created < Date.now() - PENDING_GREETING_TTL_MS) {
       pendingGreetings.delete(leadId);
     }
-  }, 5 * 60 * 1000);
+  }, PENDING_GREETING_TTL_MS);
+}
+
+export function hasPendingGreeting(leadId: number | null | undefined): boolean {
+  if (leadId == null) return false;
+  return pendingGreetings.has(leadId);
 }
 
 export function consumePendingGreeting(leadId: number): PendingGreeting | undefined {

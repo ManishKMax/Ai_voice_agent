@@ -85,11 +85,13 @@ export async function updateAgentConfig(patch: Partial<AgentConfig>): Promise<Ag
 }
 
 export function buildGreetingText(cfg: AgentConfig, leadName: string): string {
+  // Keep the greeting SHORT (~10 words) so TTS finishes in ~2s instead of ~5-6s.
+  // Long greetings caused dead-air at the start of every call.
   return cfg.tone === "professional"
-    ? `Hello, this is ${cfg.name} calling from ${cfg.companyName}. May I speak with ${leadName}?`
+    ? `Hi ${leadName}, this is ${cfg.name} from ${cfg.companyName}. Got a minute?`
     : cfg.tone === "casual"
-    ? `Hey! This is ${cfg.name} from ${cfg.companyName}. Is this ${leadName}?`
-    : `Hi there! This is ${cfg.name} from ${cfg.companyName}. Am I speaking with ${leadName}?`;
+    ? `Hey ${leadName}, ${cfg.name} from ${cfg.companyName} here. You free?`
+    : `Hi ${leadName}! ${cfg.name} from ${cfg.companyName}. Got a quick minute?`;
 }
 
 export function buildSystemPrompt(cfg: AgentConfig, leadName?: string, greetingText?: string): string {

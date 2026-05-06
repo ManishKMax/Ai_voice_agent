@@ -17,7 +17,7 @@ import {
   addAgentOpening,
   endSession,
 } from "../../services/conversation-state.js";
-import { agentConfig, buildSystemPrompt } from "../../config/agent.config.js";
+import { agentConfig, buildSystemPrompt, buildGreetingText } from "../../config/agent.config.js";
 import { config } from "../../config/index.js";
 import {
   handleCallStatusUpdate,
@@ -166,12 +166,9 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
     // Try to consume the pre-generated greeting started in triggerCallForLead.
     // If it's not present (e.g., manually-initiated call) we generate inline.
     const pending = consumePendingGreeting(leadId);
-    const greetingText = pending?.text
-      ?? (agentConfig.tone === "professional"
-        ? `Hello, this is ${agentConfig.name} calling from ${agentConfig.companyName}. May I speak with ${leadName}?`
-        : agentConfig.tone === "casual"
-        ? `Hey! This is ${agentConfig.name} from ${agentConfig.companyName}. Is this ${leadName}?`
-        : `Hi there! This is ${agentConfig.name} from ${agentConfig.companyName}. Am I speaking with ${leadName}?`);
+    // Always use buildGreetingText so the short-greeting tweak applies even
+    // on the no-prewarm fallback path (e.g. manually-initiated calls).
+    const greetingText = pending?.text ?? buildGreetingText(agentConfig, leadName);
 
     const systemPrompt = buildSystemPrompt(agentConfig, leadName, greetingText);
 

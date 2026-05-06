@@ -5,6 +5,30 @@ import { enqueueLead } from "../queue/queue.service.js";
 import { logger } from "../../lib/logger.js";
 import { fireWebhook, shouldFireWebhook, statusToEvent } from "../../services/webhook.service.js";
 import { broadcastSse } from "../../services/sse.service.js";
+import { agentConfig, buildGreetingText } from "../../config/agent.config.js";
+import { generateSpeech } from "../../services/sarvam.service.js";
+import { storeAudio, setPendingGreeting } from "../../services/audio-cache.js";
+
+/**
+ * Fire-and-forget: kick off greeting TTS the moment a lead is created so the
+ * audio is cached well before Twilio places the call. Skipped for DNC leads
+ * (they are never dialed → would just waste Sarvam quota).
+ */
+function prewarmLeadGreeting(
+  leadId: number,
+  leadName: string | null,
+  dnc: boolean | null | undefined,
+): void {
+  if (dnc) return;
+  const text = buildGreetingText(agentConfig, leadName ?? "there");
+  const promise = generateSpeech(text, agentConfig)
+    .then(buf => (buf ? storeAudio(buf, "audio/wav") : null))
+    .catch(err => {
+      logger.warn({ err, leadId }, "Lead-creation greeting prewarm failed");
+      return null;
+    });
+  setPendingGreeting(leadId, text, promise);
+}
 
 export async function retryCallForLead(leadId: number): Promise<{ queued: boolean; reason?: string }> {
   const [lead] = await db
@@ -30,7 +54,8 @@ export async function retryCallForLead(leadId: number): Promise<{ queued: boolea
 export async function createLead(data: InsertLead) {
   const [lead] = await db.insert(leadsTable).values(data as typeof leadsTable.$inferInsert).returning();
   enqueueLead(lead.id, 0, lead.priority);
-  logger.info({ leadId: lead.id }, "Lead created and enqueued");
+  prewarmLeadGreeting(lead.id, lead.name, lead.dnc);
+  logger.info({ leadId: lead.id }, "Lead created, enqueued, and greeting prewarmed");
   broadcastSse("lead.created", { leadId: lead.id, name: lead.name, status: lead.status });
   return lead;
 }
@@ -39,8 +64,9 @@ export async function createLeadsFromCSV(rows: InsertLead[]) {
   const leads = await db.insert(leadsTable).values(rows as (typeof leadsTable.$inferInsert)[]).returning();
   for (const lead of leads) {
     enqueueLead(lead.id, 0, lead.priority);
+    prewarmLeadGreeting(lead.id, lead.name, lead.dnc);
   }
-  logger.info({ count: leads.length }, "Bulk leads created and enqueued");
+  logger.info({ count: leads.length }, "Bulk leads created, enqueued, and greetings prewarmed");
   return leads;
 }
 

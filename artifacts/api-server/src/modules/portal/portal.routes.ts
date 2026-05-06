@@ -108,9 +108,10 @@ router.get("/debug/session", requireClerkAuth, async (req: any, res, next) => {
   }
 });
 
-router.get("/usage/months", requireClerkAuth, async (_req: any, res, next) => {
+router.get("/usage/months", requireClerkAuth, async (req: any, res, next) => {
   try {
-    const months = await getPortalUsageMonths();
+    const tenant = await getOrCreateTenant(req.clerkUserId, "User", "");
+    const months = await getPortalUsageMonths(tenant.id);
     res.json(months);
   } catch (err) {
     next(err);
@@ -125,7 +126,8 @@ router.get("/usage/invoice", requireClerkAuth, async (req: any, res, next) => {
       res.status(400).json({ error: "Valid year and month (1–12) are required" });
       return;
     }
-    const data = await getPortalUsageForMonth(year, month);
+    const tenant = await getOrCreateTenant(req.clerkUserId, "User", "");
+    const data = await getPortalUsageForMonth(tenant.id, year, month);
     res.json(data);
   } catch (err) {
     next(err);

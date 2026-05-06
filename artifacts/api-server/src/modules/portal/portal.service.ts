@@ -159,7 +159,7 @@ export async function getPortalUsage(limit = 20, offset = 0, tenantId?: number) 
   };
 }
 
-export async function getPortalUsageMonths() {
+export async function getPortalUsageMonths(tenantId: number) {
   const rows = await db
     .select({
       year: sql<number>`EXTRACT(YEAR FROM ${callsTable.createdAt})::int`,
@@ -167,6 +167,8 @@ export async function getPortalUsageMonths() {
       callCount: sql<number>`COUNT(*)`,
     })
     .from(callsTable)
+    .innerJoin(leadsTable, eq(callsTable.leadId, leadsTable.id))
+    .where(eq(leadsTable.tenantId, tenantId))
     .groupBy(
       sql`EXTRACT(YEAR FROM ${callsTable.createdAt})`,
       sql`EXTRACT(MONTH FROM ${callsTable.createdAt})`,
@@ -189,7 +191,7 @@ export async function getPortalUsageMonths() {
   });
 }
 
-export async function getPortalUsageForMonth(year: number, month: number) {
+export async function getPortalUsageForMonth(tenantId: number, year: number, month: number) {
   const pricing = await getPricingConfig();
   const rateRupees = pricing.perMinuteRatePaise / 100;
 
@@ -203,7 +205,12 @@ export async function getPortalUsageForMonth(year: number, month: number) {
       totalDurationSeconds: sql<number>`COALESCE(SUM(CASE WHEN ${callsTable.callStatus} = 'completed' THEN ${callsTable.duration} ELSE 0 END), 0)`,
     })
     .from(callsTable)
-    .where(and(gte(callsTable.createdAt, startOfMonth), lt(callsTable.createdAt, startOfNextMonth)));
+    .innerJoin(leadsTable, eq(callsTable.leadId, leadsTable.id))
+    .where(and(
+      eq(leadsTable.tenantId, tenantId),
+      gte(callsTable.createdAt, startOfMonth),
+      lt(callsTable.createdAt, startOfNextMonth),
+    ));
 
   const rows = await db
     .select({
@@ -217,7 +224,11 @@ export async function getPortalUsageForMonth(year: number, month: number) {
     })
     .from(callsTable)
     .innerJoin(leadsTable, eq(callsTable.leadId, leadsTable.id))
-    .where(and(gte(callsTable.createdAt, startOfMonth), lt(callsTable.createdAt, startOfNextMonth)))
+    .where(and(
+      eq(leadsTable.tenantId, tenantId),
+      gte(callsTable.createdAt, startOfMonth),
+      lt(callsTable.createdAt, startOfNextMonth),
+    ))
     .orderBy(desc(callsTable.createdAt));
 
   const totalCalls = Number(statsRow?.totalCalls ?? 0);

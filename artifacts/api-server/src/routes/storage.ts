@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { Readable } from "stream";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.js";
-import { authMiddleware } from "../middlewares/auth.js";
+import { authMiddleware, requireRole } from "../middlewares/auth.js";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -73,7 +73,10 @@ router.get("/storage/public-objects/*filePath", async (req: Request, res: Respon
  * Serve object entities from PRIVATE_OBJECT_DIR.
  * Requires authentication — private files only accessible to logged-in users.
  */
-router.get("/storage/objects/*path", authMiddleware, async (req: Request, res: Response) => {
+// Restricted to COMPANY_ADMIN / SUPER_ADMIN — these are KYC documents and
+// other tenant-private files. Tenant self-service access goes through
+// separate Clerk-authed portal routes that scope by tenantId.
+router.get("/storage/objects/*path", authMiddleware, requireRole("COMPANY_ADMIN", "SUPER_ADMIN"), async (req: Request, res: Response) => {
   try {
     const raw = req.params.path;
     const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;

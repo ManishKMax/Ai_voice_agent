@@ -79,6 +79,27 @@ export async function triggerCallForLead(leadId: number): Promise<void> {
     return;
   }
 
+  // T007: Sarvam access control — if the lead belongs to a tenant, the tenant
+  // must have sarvamEnabled. Platform-level kill-switch also applies.
+  if (lead.tenantId) {
+    const [tenant] = await db
+      .select({ sarvamEnabled: tenantsTable.sarvamEnabled })
+      .from(tenantsTable)
+      .where(eq(tenantsTable.id, lead.tenantId))
+      .limit(1);
+
+    if (!platformSettings.sarvamEnabled) {
+      logger.warn({ leadId, tenantId: lead.tenantId }, "Skipping call — Sarvam disabled platform-wide");
+      await updateLeadStatus(leadId, "no_response");
+      return;
+    }
+    if (!tenant?.sarvamEnabled) {
+      logger.warn({ leadId, tenantId: lead.tenantId }, "Skipping call — Sarvam not enabled for this tenant");
+      await updateLeadStatus(leadId, "no_response");
+      return;
+    }
+  }
+
   await updateLeadStatus(leadId, "calling");
 
   const [call] = await db
@@ -174,8 +195,11 @@ export async function handleCallStatusUpdate(
     .returning();
 
   if (status === "completed") {
-    // Check if voicemail — if answered by machine, mark no_response and retry
-    if (answeredBy && answeredBy.startsWith("machine")) {
+    // Check if voicemail — but ONLY trust AMD if no real conversation happened.
+    // Twilio's AMD often misclassifies a human's brief "hello" as machine_start;
+    // if we already exchanged turns the call was definitely with a human.
+    const hadConversation = (callRow.transcript ?? "").trim().length > 0;
+    if (answeredBy && answeredBy.startsWith("machine") && !hadConversation) {
       logger.info({ leadId, answeredBy }, "Voicemail detected — scheduling retry");
       const [lead] = await db
         .select({ retryCount: leadsTable.retryCount, priority: leadsTable.priority })

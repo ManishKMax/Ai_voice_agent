@@ -154,6 +154,20 @@ Call ends → transcript saved → Sarvam AI analysis runs
 - `GET /api/calls` — list calls
 - `GET /api/calls/:id` — single call
 
+### Admin (JWT, COMPANY_ADMIN/SUPER_ADMIN)
+- `GET/POST/PATCH/DELETE /api/admin/users` — user CRUD with role + active toggle
+- `POST /api/admin/magic-link { tenantId }` — issue 10-min portal access link
+- `GET /api/auth/magic-login?token=` — consume link, returns short JWT
+- `GET/POST /api/admin/subscriptions` — list / create tenant subscription
+- `PATCH /api/admin/tenants/:id/sarvam` — toggle sarvam access (caps at sarvamMaxUsers)
+- `POST /api/calls/:id/outcome` — set INTERESTED|NOT_INTERESTED|NO_RESPONSE; INTERESTED requires followUpDate
+- `POST /api/razorpay/webhook` — HMAC-verified (raw body) subscription webhook
+- `GET /api/reports/overview` — leads/calls/conversion/monthly volume/by-outcome
+
+**Auth rules**: First registered user becomes COMPANY_ADMIN. Role embedded in JWT. `requireRole(...)` middleware gates admin routes.
+
+**Sarvam access control**: Calls only initiate if `platformSettings.sarvamEnabled` AND tenant.sarvamEnabled (enforced in `triggerCallForLead`). Per-tenant enable is capped by `platformSettings.sarvamMaxUsers`.
+
 ### Portal (Clerk-authenticated)
 - `GET /api/portal/me` — get/create tenant, return trial + pricing info
 - `GET /api/portal/credentials` — fetch saved telephony creds (tokens redacted)

@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import crypto from "crypto";
 import { activateSubscriptionAfterPayment } from "../subscriptions/subscriptions.service.js";
 import { db } from "@workspace/db";
@@ -10,22 +10,33 @@ import { platformSettings } from "../../config/platform.config.js";
 
 const router = Router();
 
-function verifyRazorpaySignature(payload: string, signature: string, secret: string): boolean {
-  if (!secret) return true;
+function verifyRazorpaySignature(payload: Buffer | string, signature: string, secret: string): boolean {
+  if (!secret) {
+    // Only allow empty-secret bypass in development; in production always require signing.
+    return process.env.NODE_ENV !== "production";
+  }
+  if (!signature) return false;
   const expected = crypto
     .createHmac("sha256", secret)
     .update(payload)
     .digest("hex");
-  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+  const sigBuf = Buffer.from(signature);
+  const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length) return false;
+  return crypto.timingSafeEqual(expBuf, sigBuf);
 }
 
 router.post("/razorpay/webhook", async (req, res, next): Promise<void> => {
   try {
     const signature = (req.headers["x-razorpay-signature"] as string) ?? "";
-    const rawBody = JSON.stringify(req.body);
+    // Razorpay signs the EXACT raw bytes — JSON.stringify(req.body) re-serializes
+    // and changes whitespace/key order, so HMAC will not match. Use the raw buffer
+    // captured by the express.json `verify` hook in app.ts.
+    const rawBody: Buffer | string =
+      (req as Request & { rawBody?: Buffer }).rawBody ?? JSON.stringify(req.body);
     const secret = platformSettings.razorpayWebhookSecret || process.env.RAZORPAY_WEBHOOK_SECRET || "";
 
-    if (secret && !verifyRazorpaySignature(rawBody, signature, secret)) {
+    if (!verifyRazorpaySignature(rawBody, signature, secret)) {
       logger.warn("Razorpay webhook signature mismatch");
       res.status(400).json({ error: "Invalid signature" });
       return;

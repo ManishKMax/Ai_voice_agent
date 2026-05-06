@@ -45,6 +45,11 @@ export async function initiateCall(
     "Initiating Twilio call",
   );
 
+  // NOTE: Machine detection is intentionally DISABLED.
+  // Twilio's AMD frequently false-positives on real humans who answer with
+  // a short "hello" (especially Indian numbers), causing the AI to abandon
+  // a real conversation. We rely on the conversation flow to detect end
+  // of call instead.
   const call = await getClient(creds).calls.create({
     to: toPhone,
     from: fromNumber,
@@ -52,10 +57,6 @@ export async function initiateCall(
     statusCallback: statusCallbackUrl,
     statusCallbackMethod: "POST",
     statusCallbackEvent: ["initiated", "ringing", "answered", "completed", "no-answer", "busy", "failed"],
-    machineDetection: "Enable",
-    machineDetectionTimeout: 5,
-    asyncAmdStatusCallback: statusCallbackUrl,
-    asyncAmdStatusCallbackMethod: "POST",
   });
 
   logger.info({ callSid: call.sid, leadId }, "Twilio call created");

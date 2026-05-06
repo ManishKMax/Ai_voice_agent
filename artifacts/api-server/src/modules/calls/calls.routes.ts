@@ -11,7 +11,6 @@ import {
   listCalls,
   getCall,
   listCallsForLead,
-  updateOutcome,
 } from "./calls.controller.js";
 
 const router = Router();
@@ -33,7 +32,9 @@ router.get("/calls/:id", authMiddleware, getCall);
 // Call history by lead
 router.get("/leads/:leadId/calls", authMiddleware, listCallsForLead);
 
-// Call outcome update
-router.patch("/calls/:id/outcome", authMiddleware, updateOutcome);
+// NOTE: PATCH /calls/:id/outcome lives in `call-outcome.routes.ts` — that
+// router has the full implementation (audit logging + lead-status update).
+// Do NOT redefine it here, otherwise the first match wins and the audited
+// version becomes unreachable.
 
 export default router;

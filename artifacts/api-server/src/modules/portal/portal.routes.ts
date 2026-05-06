@@ -29,12 +29,12 @@ const requireClerkAuth = (req: any, res: any, next: any) => {
   if (!auth?.userId) {
     const authHeader = req.headers.authorization || "";
     const hasBearer = authHeader.toLowerCase().startsWith("bearer ");
-    const tokenPreview = hasBearer ? authHeader.slice(7, 27) + "..." : "(none)";
+    // Do NOT log any portion of the bearer token — even a prefix is credential
+    // material that could appear in shared logs.
     logger.warn({
       path: req.path,
       hasAuthHeader: !!authHeader,
       hasBearer,
-      tokenPreview,
       authReason: (auth as any)?.reason,
       authMessage: (auth as any)?.message,
       authState: (auth as any)?.sessionClaims ? "has-claims" : "no-claims",

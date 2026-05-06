@@ -1,10 +1,37 @@
-import { Router, type IRouter, type Request, type Response } from "express";
+import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { Readable } from "stream";
+import { getAuth } from "@clerk/express";
+import jwt from "jsonwebtoken";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.js";
 import { authMiddleware, requireRole } from "../middlewares/auth.js";
+import { config } from "../config/index.js";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
+
+/**
+ * Allow either an admin JWT (Bearer) OR a Clerk-authenticated portal user.
+ * Issuing presigned upload URLs without auth would let anyone write to the
+ * private bucket.
+ */
+function requireAnyAuth(req: Request, res: Response, next: NextFunction): void {
+  // Try admin JWT
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    try {
+      jwt.verify(authHeader.slice(7), config.jwtSecret);
+      return next();
+    } catch {
+      // fall through to Clerk
+    }
+  }
+  // Try Clerk
+  const clerkAuth = getAuth(req);
+  if (clerkAuth?.userId) {
+    return next();
+  }
+  res.status(401).json({ error: "Unauthorized" });
+}
 
 /**
  * POST /storage/uploads/request-url
@@ -13,7 +40,7 @@ const objectStorageService = new ObjectStorageService();
  * The client sends JSON metadata (name, size, contentType) — NOT the file.
  * Then uploads the file directly to the returned presigned URL.
  */
-router.post("/storage/uploads/request-url", async (req: Request, res: Response) => {
+router.post("/storage/uploads/request-url", requireAnyAuth, async (req: Request, res: Response) => {
   const { name, size, contentType } = req.body ?? {};
   if (
     typeof name !== "string" || !name ||

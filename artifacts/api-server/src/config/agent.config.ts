@@ -84,6 +84,14 @@ export async function updateAgentConfig(patch: Partial<AgentConfig>): Promise<Ag
   return agentConfig;
 }
 
+export function buildGreetingText(cfg: AgentConfig, leadName: string): string {
+  return cfg.tone === "professional"
+    ? `Hello, this is ${cfg.name} calling from ${cfg.companyName}. May I speak with ${leadName}?`
+    : cfg.tone === "casual"
+    ? `Hey! This is ${cfg.name} from ${cfg.companyName}. Is this ${leadName}?`
+    : `Hi there! This is ${cfg.name} from ${cfg.companyName}. Am I speaking with ${leadName}?`;
+}
+
 export function buildSystemPrompt(cfg: AgentConfig, leadName?: string, greetingText?: string): string {
   if (cfg.customSystemPrompt) {
     const nameCtx = leadName ? `\nThe lead's name is ${leadName}.` : "";

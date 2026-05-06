@@ -9,7 +9,7 @@ import {
   generateSayTwiML,
 } from "../../services/twilio.service.js";
 import { generateSpeech, generateConversationResponse, analyzeTranscript } from "../../services/sarvam.service.js";
-import { storeAudio, getAudio } from "../../services/audio-cache.js";
+import { storeAudio, getAudio, consumePendingGreeting } from "../../services/audio-cache.js";
 import {
   createSession,
   getSession,
@@ -163,12 +163,15 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
     const lead = leadId ? await getLeadById(leadId) : null;
     const leadName = lead?.name ?? "there";
 
-    // Build the opening line
-    const greetingText = agentConfig.tone === "professional"
-      ? `Hello, this is ${agentConfig.name} calling from ${agentConfig.companyName}. May I speak with ${leadName}?`
-      : agentConfig.tone === "casual"
-      ? `Hey! This is ${agentConfig.name} from ${agentConfig.companyName}. Is this ${leadName}?`
-      : `Hi there! This is ${agentConfig.name} from ${agentConfig.companyName}. Am I speaking with ${leadName}?`;
+    // Try to consume the pre-generated greeting started in triggerCallForLead.
+    // If it's not present (e.g., manually-initiated call) we generate inline.
+    const pending = consumePendingGreeting(leadId);
+    const greetingText = pending?.text
+      ?? (agentConfig.tone === "professional"
+        ? `Hello, this is ${agentConfig.name} calling from ${agentConfig.companyName}. May I speak with ${leadName}?`
+        : agentConfig.tone === "casual"
+        ? `Hey! This is ${agentConfig.name} from ${agentConfig.companyName}. Is this ${leadName}?`
+        : `Hi there! This is ${agentConfig.name} from ${agentConfig.companyName}. Am I speaking with ${leadName}?`);
 
     const systemPrompt = buildSystemPrompt(agentConfig, leadName, greetingText);
 
@@ -185,18 +188,29 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
       startedAt: Date.now(),
     });
 
-    logger.info({ leadId, callSid, leadName }, "Session created, generating greeting audio");
+    logger.info({ leadId, callSid, leadName, prewarmed: !!pending }, "Session created, resolving greeting audio");
 
-    const audioBuffer = await generateSpeech(greetingText, agentConfig);
+    // Wait at most 2.5s for the pre-warmed greeting; fall back to Polly Say
+    // (instant, no API call) if Sarvam TTS hasn't completed by then. This
+    // guarantees /api/voice always returns TwiML in well under 3 seconds.
+    let audioId: string | null = null;
+    if (pending) {
+      audioId = await Promise.race([
+        pending.promise,
+        new Promise<null>(resolve => setTimeout(() => resolve(null), 2500)),
+      ]);
+    } else {
+      const buf = await generateSpeech(greetingText, agentConfig);
+      audioId = buf ? storeAudio(buf, "audio/wav") : null;
+    }
 
-    if (!audioBuffer) {
-      logger.warn({ leadId }, "TTS failed for greeting — using Twilio Say");
+    if (!audioId) {
+      logger.warn({ leadId }, "Greeting audio not ready — falling back to Polly Say");
       const twiml = generateSayTwiML(greetingText, agentConfig.language, leadId, 0, false);
       xmlResponse(res, twiml);
       return;
     }
 
-    const audioId = storeAudio(audioBuffer, "audio/wav");
     const twiml = generateInitialTwiML(leadId, audioId, agentConfig.language);
     xmlResponse(res, twiml);
   } catch (err) {

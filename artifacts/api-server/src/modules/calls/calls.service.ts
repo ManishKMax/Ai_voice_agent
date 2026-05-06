@@ -7,6 +7,9 @@ import { updateLeadStatus } from "../leads/leads.service.js";
 import { enqueueLead, dequeueLeadJobs } from "../queue/queue.service.js";
 import { platformSettings } from "../../config/platform.config.js";
 import { logger } from "../../lib/logger.js";
+import { agentConfig, buildGreetingText } from "../../config/agent.config.js";
+import { generateSpeech } from "../../services/sarvam.service.js";
+import { storeAudio, setPendingGreeting } from "../../services/audio-cache.js";
 
 async function dispatchCall(
   toPhone: string,
@@ -106,6 +109,19 @@ export async function triggerCallForLead(leadId: number): Promise<void> {
     .insert(callsTable)
     .values({ leadId, callStatus: "initiated" })
     .returning();
+
+  // Pre-generate the greeting audio NOW so it is ready by the time Twilio's
+  // /api/voice webhook fires (after 5-7s of ringing). This eliminates the
+  // 2-6s of dead-air the caller used to hear at the start of every call.
+  const greetingText = buildGreetingText(agentConfig, lead.name ?? "there");
+  const greetingPromise = generateSpeech(greetingText, agentConfig)
+    .then(buf => (buf ? storeAudio(buf, "audio/wav") : null))
+    .catch(err => {
+      logger.warn({ err, leadId }, "Pre-greeting TTS failed — voice webhook will fall back to Polly");
+      return null;
+    });
+  setPendingGreeting(leadId, greetingText, greetingPromise);
+  logger.info({ leadId }, "Greeting TTS started in background");
 
   try {
     const callSid = await dispatchCall(lead.phone, leadId, lead.tenantId ?? null);

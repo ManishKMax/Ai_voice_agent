@@ -156,6 +156,16 @@ Call ends → transcript saved → Sarvam AI analysis runs
 
 ### Portal (Clerk-authenticated)
 - `GET /api/portal/me` — get/create tenant, return trial + pricing info
+- `GET /api/portal/credentials` — fetch saved telephony creds (tokens redacted)
+- `PATCH /api/portal/credentials` — save Twilio/Exotel creds + provider
+- `POST /api/portal/credentials/test` — live-validate creds against provider
+- `GET/POST/DELETE /api/portal/leads` + `POST /leads/:id/retry` — tenant-scoped leads
+- `GET /api/portal/usage` — tenant-scoped usage (tenantId-filtered)
+
+### Telephony providers
+- `services/twilio.service.ts` — `initiateCall(toPhone, leadId, creds?)` — per-tenant creds optional
+- `services/exotel.service.ts` — `initiateExotelCall()` via Connect Two Numbers API
+- `calls.service.dispatchCall()` routes by `lead.tenantId` → tenant.telephonyProvider
 
 ## Environment Variables Required
 

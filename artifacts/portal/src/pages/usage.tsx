@@ -110,7 +110,7 @@ export default function Usage() {
   );
 
   const offset = page * PAGE_SIZE;
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error } = useQuery<any>({
     queryKey: ["portal-usage", page],
     queryFn: async () => {
       const token = await getToken();

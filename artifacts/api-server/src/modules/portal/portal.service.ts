@@ -57,9 +57,14 @@ function formatSource(source: string | null): string {
   return map[source] ?? source.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export async function getPortalUsage(limit = 20, offset = 0) {
+export async function getPortalUsage(limit = 20, offset = 0, tenantId?: number) {
   const pricing = await getPricingConfig();
   const rateRupees = pricing.perMinuteRatePaise / 100;
+
+  // Tenant isolation: only count this tenant's leads/calls
+  const tenantJoin = tenantId !== undefined
+    ? and(eq(callsTable.leadId, leadsTable.id), eq(leadsTable.tenantId, tenantId))
+    : eq(callsTable.leadId, leadsTable.id);
 
   const [statsRow] = await db
     .select({
@@ -67,11 +72,13 @@ export async function getPortalUsage(limit = 20, offset = 0) {
       completedCalls: sql<number>`COUNT(CASE WHEN ${callsTable.callStatus} = 'completed' THEN 1 END)`,
       totalDurationSeconds: sql<number>`COALESCE(SUM(CASE WHEN ${callsTable.callStatus} = 'completed' THEN ${callsTable.duration} ELSE 0 END), 0)`,
     })
-    .from(callsTable);
+    .from(callsTable)
+    .innerJoin(leadsTable, tenantJoin);
 
   const [countRow] = await db
     .select({ count: sql<number>`COUNT(*)` })
-    .from(callsTable);
+    .from(callsTable)
+    .innerJoin(leadsTable, tenantJoin);
 
   const totalCalls = Number(statsRow?.totalCalls ?? 0);
   const completedCalls = Number(statsRow?.completedCalls ?? 0);
@@ -87,7 +94,7 @@ export async function getPortalUsage(limit = 20, offset = 0) {
       totalDurationSeconds: sql<number>`COALESCE(SUM(CASE WHEN ${callsTable.callStatus} = 'completed' THEN ${callsTable.duration} ELSE 0 END), 0)`,
     })
     .from(callsTable)
-    .innerJoin(leadsTable, eq(callsTable.leadId, leadsTable.id))
+    .innerJoin(leadsTable, tenantJoin)
     .groupBy(leadsTable.source);
 
   const byCampaign = campaignRows.map((row) => {
@@ -114,7 +121,7 @@ export async function getPortalUsage(limit = 20, offset = 0) {
       source: leadsTable.source,
     })
     .from(callsTable)
-    .innerJoin(leadsTable, eq(callsTable.leadId, leadsTable.id))
+    .innerJoin(leadsTable, tenantJoin)
     .orderBy(desc(callsTable.createdAt))
     .limit(limit)
     .offset(offset);
@@ -254,6 +261,101 @@ export async function getPortalUsageForMonth(year: number, month: number) {
     calls,
     perMinuteRateRupees: rateRupees,
   };
+}
+
+export async function updateTenantCredentials(
+  tenantId: number,
+  fields: {
+    telephonyProvider?: "twilio" | "exotel";
+    twilioAccountSid?: string;
+    twilioAuthToken?: string;
+    twilioPhoneNumber?: string;
+    exotelAccountSid?: string;
+    exotelApiKey?: string;
+    exotelApiToken?: string;
+    exotelPhoneNumber?: string;
+  },
+) {
+  const updates: Record<string, unknown> = { updatedAt: new Date() };
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined && value !== "") {
+      updates[key] = value;
+    }
+  }
+
+  const [updated] = await db
+    .update(tenantsTable)
+    .set(updates)
+    .where(eq(tenantsTable.id, tenantId))
+    .returning();
+
+  return updated;
+}
+
+export async function getTenantLeads(
+  tenantId: number,
+  opts: { limit?: number; offset?: number; status?: string } = {},
+) {
+  const limit = Math.min(100, Math.max(1, opts.limit ?? 50));
+  const offset = Math.max(0, opts.offset ?? 0);
+
+  const where = opts.status
+    ? and(eq(leadsTable.tenantId, tenantId), eq(leadsTable.status, opts.status as any))
+    : eq(leadsTable.tenantId, tenantId);
+
+  const [{ count }] = await db
+    .select({ count: sql<number>`COUNT(*)` })
+    .from(leadsTable)
+    .where(where);
+
+  const rows = await db
+    .select()
+    .from(leadsTable)
+    .where(where)
+    .orderBy(desc(leadsTable.createdAt))
+    .limit(limit)
+    .offset(offset);
+
+  return { leads: rows, total: Number(count ?? 0) };
+}
+
+export async function createTenantLead(
+  tenantId: number,
+  data: { name: string; phone: string; notes?: string; tags?: string; priority?: 1 | 2 | 3 | 4 },
+) {
+  const [created] = await db
+    .insert(leadsTable)
+    .values({
+      tenantId,
+      name: data.name,
+      phone: data.phone,
+      notes: data.notes ?? null,
+      tags: data.tags ?? "",
+      priority: data.priority ?? 2,
+      source: "portal",
+    })
+    .returning();
+  return created;
+}
+
+export async function deleteTenantLead(tenantId: number, leadId: number) {
+  const [lead] = await db
+    .select()
+    .from(leadsTable)
+    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)))
+    .limit(1);
+  if (!lead) return null;
+  await db.delete(leadsTable).where(eq(leadsTable.id, leadId));
+  return lead;
+}
+
+export async function getTenantLead(tenantId: number, leadId: number) {
+  const [lead] = await db
+    .select()
+    .from(leadsTable)
+    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.tenantId, tenantId)))
+    .limit(1);
+  return lead ?? null;
 }
 
 export async function submitKycDocument(

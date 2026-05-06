@@ -20,6 +20,7 @@ export type LeadPriority = (typeof leadPriorityEnum)[number];
 
 export const leadsTable = pgTable("leads", {
   id: serial("id").primaryKey(),
+  tenantId: integer("tenant_id"),
   name: text("name").notNull(),
   phone: text("phone").notNull(),
   source: text("source").default("manual"),

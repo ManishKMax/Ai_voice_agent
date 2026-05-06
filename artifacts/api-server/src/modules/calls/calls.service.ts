@@ -1,11 +1,60 @@
 import { eq, desc } from "drizzle-orm";
 import { db } from "@workspace/db";
-import { callsTable, leadsTable, type CallStatus } from "@workspace/db/schema";
+import { callsTable, leadsTable, tenantsTable, type CallStatus } from "@workspace/db/schema";
 import { initiateCall } from "../../services/twilio.service.js";
+import { initiateExotelCall } from "../../services/exotel.service.js";
 import { updateLeadStatus } from "../leads/leads.service.js";
 import { enqueueLead, dequeueLeadJobs } from "../queue/queue.service.js";
 import { platformSettings } from "../../config/platform.config.js";
 import { logger } from "../../lib/logger.js";
+
+async function dispatchCall(
+  toPhone: string,
+  leadId: number,
+  tenantId: number | null,
+): Promise<string> {
+  // Platform-level call (admin dashboard, no tenant) — uses platform Twilio creds
+  if (!tenantId) {
+    return initiateCall(toPhone, leadId);
+  }
+
+  // Tenant-level call — load tenant creds and route by provider
+  const [tenant] = await db
+    .select()
+    .from(tenantsTable)
+    .where(eq(tenantsTable.id, tenantId))
+    .limit(1);
+
+  if (!tenant) {
+    logger.warn({ tenantId, leadId }, "Tenant not found, falling back to platform Twilio");
+    return initiateCall(toPhone, leadId);
+  }
+
+  const provider = tenant.telephonyProvider ?? "twilio";
+
+  if (provider === "exotel") {
+    if (!tenant.exotelAccountSid || !tenant.exotelApiKey || !tenant.exotelApiToken || !tenant.exotelPhoneNumber) {
+      throw new Error("Exotel credentials are not configured for this tenant");
+    }
+    return initiateExotelCall(toPhone, leadId, {
+      accountSid: tenant.exotelAccountSid,
+      apiKey: tenant.exotelApiKey,
+      apiToken: tenant.exotelApiToken,
+      phoneNumber: tenant.exotelPhoneNumber,
+    });
+  }
+
+  // Twilio path: per-tenant creds if available, else platform fallback
+  if (tenant.twilioAccountSid && tenant.twilioAuthToken && tenant.twilioPhoneNumber) {
+    return initiateCall(toPhone, leadId, {
+      accountSid: tenant.twilioAccountSid,
+      authToken: tenant.twilioAuthToken,
+      phoneNumber: tenant.twilioPhoneNumber,
+    });
+  }
+
+  return initiateCall(toPhone, leadId);
+}
 
 export async function triggerCallForLead(leadId: number): Promise<void> {
   const [lead] = await db
@@ -38,7 +87,7 @@ export async function triggerCallForLead(leadId: number): Promise<void> {
     .returning();
 
   try {
-    const callSid = await initiateCall(lead.phone, leadId);
+    const callSid = await dispatchCall(lead.phone, leadId, lead.tenantId ?? null);
     await db
       .update(callsTable)
       .set({ twilioCallSid: callSid, updatedAt: new Date() })

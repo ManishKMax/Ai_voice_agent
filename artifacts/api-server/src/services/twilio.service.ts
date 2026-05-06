@@ -4,11 +4,20 @@ import { logger } from "../lib/logger.js";
 
 let _client: ReturnType<typeof twilio> | null = null;
 
+export interface TwilioCredentials {
+  accountSid: string;
+  authToken: string;
+  phoneNumber: string;
+}
+
 export function resetClient() {
   _client = null;
 }
 
-function getClient() {
+function getClient(creds?: TwilioCredentials) {
+  if (creds) {
+    return twilio(creds.accountSid, creds.authToken);
+  }
   if (!_client) {
     if (!config.twilio.accountSid || !config.twilio.authToken) {
       throw new Error("Twilio credentials are not configured (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN)");
@@ -18,19 +27,27 @@ function getClient() {
   return _client;
 }
 
-export async function initiateCall(toPhone: string, leadId: number): Promise<string> {
-  if (!config.twilio.phoneNumber) {
+export async function initiateCall(
+  toPhone: string,
+  leadId: number,
+  creds?: TwilioCredentials,
+): Promise<string> {
+  const fromNumber = creds?.phoneNumber || config.twilio.phoneNumber;
+  if (!fromNumber) {
     throw new Error("TWILIO_PHONE_NUMBER is not configured");
   }
 
   const voiceUrl = `${config.baseUrl}/api/voice?leadId=${leadId}`;
   const statusCallbackUrl = `${config.baseUrl}/api/call-status?leadId=${leadId}`;
 
-  logger.info({ toPhone, leadId, voiceUrl }, "Initiating Twilio call");
+  logger.info(
+    { toPhone, leadId, voiceUrl, perTenant: !!creds },
+    "Initiating Twilio call",
+  );
 
-  const call = await getClient().calls.create({
+  const call = await getClient(creds).calls.create({
     to: toPhone,
-    from: config.twilio.phoneNumber,
+    from: fromNumber,
     url: voiceUrl,
     statusCallback: statusCallbackUrl,
     statusCallbackMethod: "POST",

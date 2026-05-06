@@ -18,6 +18,7 @@ import {
   endSession,
 } from "../../services/conversation-state.js";
 import { agentConfig, buildSystemPrompt } from "../../config/agent.config.js";
+import { config } from "../../config/index.js";
 import {
   handleCallStatusUpdate,
   getCalls,
@@ -275,59 +276,104 @@ export async function voiceGatherWebhook(req: Request, res: Response): Promise<v
 }
 
 // ── Respond Webhook (serves real AI audio after background job completes) ───
+//
+// Sarvam-105b can take 8–14s to respond. We CANNOT block the Twilio HTTP
+// response that long — Twilio plays silence to the caller while waiting,
+// which is why callers hear the filler then dead air and hang up.
+//
+// Pattern: poll briefly (~2s). If the job isn't ready, respond IMMEDIATELY
+// with a short pause + redirect back to ourselves. Twilio plays 2s of silence
+// (or a brief tone) then re-calls us. Each iteration is < 3s so the audio
+// stream never goes quiet for long, and the call never approaches Twilio's
+// 15s webhook timeout.
+
+const MAX_RESPOND_WAITS = 8;       // 8 iterations × ~2.5s ≈ 20s total budget
+const RESPOND_POLL_MS = 2000;       // poll the job for 2s per iteration
 
 export async function voiceRespondWebhook(req: Request, res: Response): Promise<void> {
   const q = req.query as Record<string, string>;
   const leadId = parseInt(q.leadId ?? "0");
   const turn = parseInt(q.turn ?? "0");
   const jobId = q.jobId ?? "";
+  const waitCount = parseInt(q.wait ?? "0");
 
-  logger.info({ jobId, leadId, turn }, "Respond webhook — waiting for background job");
+  logger.info({ jobId, leadId, turn, waitCount }, "Respond webhook — checking background job");
 
   try {
-    // Poll for up to 12 seconds.
-    // The filler phrase takes ~0.5–1s to play before Twilio calls this endpoint,
-    // so we effectively have ~11 more seconds of budget before Twilio's 15s timeout.
-    const job = await waitForJob(jobId, 12000);
+    const job = await waitForJob(jobId, RESPOND_POLL_MS);
 
-    if (!job || job.status === "error") {
-      logger.warn({ jobId, leadId }, "Job failed or timed out — ending call gracefully");
+    // Job done — serve the real audio
+    if (job && job.status === "done") {
+      const nextTurn = turn + 1;
+
+      if (job.isEnd) {
+        if (job.audioId) {
+          xmlResponse(res, generateEndCallTwiML(job.audioId));
+        } else {
+          xmlResponse(res, generateSayTwiML(
+            job.agentText && job.agentText.trim()
+              ? job.agentText
+              : "Thank you for your time. Have a great day!",
+            agentConfig.language
+          ));
+        }
+        return;
+      }
+
+      if (job.audioId) {
+        xmlResponse(res, generateRespondTwiML(leadId, nextTurn, job.audioId, agentConfig.language));
+      } else {
+        // Sarvam TTS failed but we have AI text — speak it via Polly so the
+        // caller hears the AI's actual reply, not a generic placeholder.
+        const fallbackText = job.agentText && job.agentText.trim()
+          ? job.agentText
+          : "I see. Could you tell me more?";
+        logger.warn({ jobId, leadId, hasAgentText: !!job.agentText }, "TTS missing — falling back to Polly Say");
+        xmlResponse(res, generateSayTwiML(
+          fallbackText, agentConfig.language, leadId, nextTurn, false
+        ));
+      }
+
+      logger.info({ jobId, leadId, turn: nextTurn }, "Respond webhook served AI audio");
+      return;
+    }
+
+    // Job errored — graceful exit
+    if (job && job.status === "error") {
+      logger.warn({ jobId, leadId, waitCount }, "Job errored — ending call gracefully");
       xmlResponse(res, generateSayTwiML(
-        "I apologize, I had a brief technical issue. I'll call you back shortly. Have a great day!",
+        "I apologize, I had a brief technical issue. I will reach out again shortly. Have a great day!",
         agentConfig.language
       ));
       return;
     }
 
-    const nextTurn = turn + 1;
-
-    if (job.isEnd) {
-      if (job.audioId) {
-        xmlResponse(res, generateEndCallTwiML(job.audioId));
-      } else {
-        xmlResponse(res, generateSayTwiML(
-          job.agentText ?? "Thank you for your time. Have a great day!",
-          agentConfig.language
-        ));
-      }
+    // Still pending — give up if we've waited too long
+    if (waitCount + 1 >= MAX_RESPOND_WAITS) {
+      logger.warn({ jobId, leadId, waitCount }, "Job exceeded max waits — ending call");
+      xmlResponse(res, generateSayTwiML(
+        "I apologize for the delay. Let me reach out to you again shortly. Have a great day!",
+        agentConfig.language
+      ));
       return;
     }
 
-    if (job.audioId) {
-      xmlResponse(res, generateRespondTwiML(leadId, nextTurn, job.audioId, agentConfig.language));
-    } else {
-      // TTS failed — fall back to Polly so the conversation doesn't drop
-      xmlResponse(res, generateSayTwiML(
-        job.agentText ?? "I see. Could you tell me more?",
-        agentConfig.language, leadId, nextTurn, false
-      ));
-    }
+    // Loop: pause briefly and re-call ourselves so Twilio keeps the line open
+    // without blocking on a single HTTP response.
+    const nextWait = waitCount + 1;
+    const respondUrl = `${config.baseUrl}/api/voice/respond?leadId=${leadId}&turn=${turn}&jobId=${jobId}&wait=${nextWait}`
+      .replace(/&/g, "&amp;");
 
-    logger.info({ jobId, leadId, turn: nextTurn }, "Respond webhook served AI audio");
+    logger.info({ jobId, leadId, waitCount: nextWait }, "Job still pending — looping with pause+redirect");
+    xmlResponse(res, `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Pause length="2"/>
+  <Redirect method="POST">${respondUrl}</Redirect>
+</Response>`);
   } catch (err) {
     logger.error({ err, jobId, leadId }, "Respond webhook error");
     xmlResponse(res, generateSayTwiML(
-      "I apologize for the interruption. I'll reach out again soon.",
+      "I apologize for the interruption. I will reach out again soon.",
       agentConfig.language
     ));
   }

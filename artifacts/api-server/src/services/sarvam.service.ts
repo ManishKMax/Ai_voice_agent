@@ -23,6 +23,30 @@ function sarvamHeaders(): Record<string, string> {
   return { "api-subscription-key": config.sarvam.apiKey };
 }
 
+// Sarvam TTS hard limit is 500 chars per input. We trim to 480 to leave
+// room for preprocessing expansion (numbers → words, etc.) and break at a
+// sentence/clause boundary so speech doesn't cut mid-word.
+const TTS_MAX_CHARS = 480;
+
+export function truncateForTTS(text: string, maxChars = TTS_MAX_CHARS): string {
+  const t = text.trim();
+  if (t.length <= maxChars) return t;
+  const slice = t.slice(0, maxChars);
+  // Prefer cutting at sentence end, then comma/semicolon, then last space.
+  const sentenceEnd = Math.max(
+    slice.lastIndexOf(". "),
+    slice.lastIndexOf("! "),
+    slice.lastIndexOf("? "),
+    slice.lastIndexOf("। "),
+  );
+  if (sentenceEnd > maxChars * 0.5) return slice.slice(0, sentenceEnd + 1).trim();
+  const clauseEnd = Math.max(slice.lastIndexOf(", "), slice.lastIndexOf("; "));
+  if (clauseEnd > maxChars * 0.6) return slice.slice(0, clauseEnd + 1).trim();
+  const lastSpace = slice.lastIndexOf(" ");
+  if (lastSpace > 0) return slice.slice(0, lastSpace).trim();
+  return slice.trim();
+}
+
 /**
  * Generate agent speech audio using Sarvam Bulbul v3 TTS.
  * Returns a WAV audio Buffer, or null on failure.
@@ -36,6 +60,16 @@ export async function generateSpeech(
     return null;
   }
 
+  // Sarvam TTS rejects inputs > 500 chars with HTTP 400. Hard-truncate
+  // before sending — long AI replies should never break the call.
+  const safeText = truncateForTTS(text);
+  if (safeText.length < text.length) {
+    logger.warn(
+      { originalLength: text.length, truncatedLength: safeText.length },
+      "TTS input truncated to fit Sarvam 500-char limit",
+    );
+  }
+
   try {
     const response = await fetch(TTS_URL, {
       method: "POST",
@@ -44,7 +78,7 @@ export async function generateSpeech(
         ...sarvamHeaders(),
       },
       body: JSON.stringify({
-        inputs: [text],
+        inputs: [safeText],
         target_language_code: cfg.language,
         speaker: cfg.voice,
         model: TTS_MODEL,

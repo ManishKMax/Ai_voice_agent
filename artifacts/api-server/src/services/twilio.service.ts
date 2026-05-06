@@ -77,7 +77,9 @@ export function generateInitialTwiML(
 <Response>
   <Gather input="speech dtmf" action="${gatherAction}" method="POST"
           language="${language}" speechTimeout="auto" timeout="15"
-          maxSpeechTime="15" finishOnKey="">
+          maxSpeechTime="15" finishOnKey=""
+          speechModel="phone_call" enhanced="true"
+          hints="${SPEECH_HINTS}">
     <Play>${audioUrl}</Play>
   </Gather>
   <Hangup/>
@@ -119,7 +121,9 @@ export function generateRespondTwiML(
 <Response>
   <Gather input="speech dtmf" action="${gatherAction}" method="POST"
           language="${language}" speechTimeout="auto" timeout="15"
-          maxSpeechTime="15" finishOnKey="">
+          maxSpeechTime="15" finishOnKey=""
+          speechModel="phone_call" enhanced="true"
+          hints="${SPEECH_HINTS}">
     <Play>${audioUrl}</Play>
   </Gather>
   <Hangup/>
@@ -167,12 +171,21 @@ export function generateSayTwiML(
 <Response>
   <Gather input="speech dtmf" action="${gatherAction}" method="POST"
           language="${language}" speechTimeout="auto" timeout="15"
-          maxSpeechTime="15" finishOnKey="">
+          maxSpeechTime="15" finishOnKey=""
+          speechModel="phone_call" enhanced="true"
+          hints="${SPEECH_HINTS}">
     <Say voice="${voice}" language="${language}">${escapeXml(text)}</Say>
   </Gather>
   <Hangup/>
 </Response>`;
 }
+
+const SPEECH_HINTS = [
+  "yes", "no", "haan", "nahi", "interested", "not interested",
+  "tell me more", "send details", "call me later", "busy", "okay", "sure",
+  "CRM", "demo", "price", "cost", "trial", "schedule", "meeting",
+  "WhatsApp", "email", "rupees", "lakh", "crore",
+].join(",");
 
 function escapeXml(text: string): string {
   return text

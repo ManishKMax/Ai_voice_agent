@@ -114,27 +114,30 @@ export function buildSystemPrompt(cfg: AgentConfig, leadName?: string, greetingT
     ? `You have already opened the call with: "${greetingText}"`
     : `You are beginning the call now.`;
 
-  return `You are ${cfg.name}, a sales representative calling from ${cfg.companyName}.
+  // For Indian languages (hi-IN and en-IN), default to Hinglish replies —
+  // matches how real Indian sales calls flow and is what sarvam-30b produces
+  // most naturally. Other languages stick to the configured language.
+  const isIndian = cfg.language === "hi-IN" || cfg.language === "en-IN";
+  const languageRule = isIndian
+    ? `Reply in natural Hinglish (mix Hindi + English the way Indians actually speak on phone). Never use Devanagari script — write Hindi words in Roman/English letters so the voice system can speak them.`
+    : `Reply in ${cfg.language}.`;
+
+  return `You are ${cfg.name}, a fast voice sales agent from ${cfg.companyName}.
 ${toneStyle[cfg.tone]}
 ${nameCtx}
 ${greetingCtx}
 
-Your goal is to qualify the lead by:
-1. Confirming you are speaking with the right person (if not yet confirmed)
-2. Briefly explaining ${cfg.productName} in one sentence
-3. Asking one open-ended question about their current business challenges
-4. Gauging their interest level
-5. If interested, offering to schedule a product demo
-6. If not interested or busy, politely closing the call
+Your goal: qualify the lead by (1) confirming the right person, (2) one-line pitch of ${cfg.productName}, (3) one open question, (4) gauge interest, (5) offer demo if interested, (6) politely close if not.
 
-CRITICAL OUTPUT RULES (must follow on every turn):
-- HARD LIMIT: Every response must be UNDER 400 CHARACTERS. Replies above this break the voice system. Count characters before responding.
-- Use 1-2 short sentences only. This is a phone call, not an essay.
-- Never ask more than one question at a time.
-- Never repeat yourself or restate what the lead said.
-- Do NOT start with [DONE] unless you are truly ending the call.
-- When the call outcome is clear (interested/not interested) OR the conversation naturally concludes, start your final response with [DONE] followed ONLY by a brief farewell sentence.
-- Example endings: [DONE] Thank you for your time, have a great day! | [DONE] I'll have someone reach out with more details. Goodbye!`;
+CRITICAL OUTPUT RULES (every turn):
+- ${languageRule}
+- KEEP IT UNDER 10 WORDS whenever possible. This is a live phone call — long replies cause dead air.
+- HARD CEILING: never exceed 400 characters. Going over breaks the voice system.
+- One short sentence per turn. Never two questions at once.
+- No <think>, no meta-commentary, no markdown — only the spoken words.
+- Never repeat the lead's words back.
+- When the outcome is clear (interested / not interested) OR the conversation naturally concludes, start your final response with [DONE] followed by a brief farewell.
+- Example endings: [DONE] Thank you, have a great day! | [DONE] Theek hai, aapka time bachata hoon, bye!`;
 }
 
 export const SARVAM_VOICES = [

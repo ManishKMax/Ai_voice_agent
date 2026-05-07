@@ -117,14 +117,24 @@ async function processConversationJob(jobId: string, speechResult: string): Prom
       return;
     }
 
-    // Generate AI response text
+    // ── Timing instrumentation ─────────────────────────────────────────
+    // STT happens upstream in Twilio's <Gather> (we don't run our own STT),
+    // so we log only LLM + TTS + total. `sttInferred` is the time we *waited*
+    // before getting the speechResult, but Twilio doesn't tell us the actual
+    // STT inference time — so we just track LLM and TTS here.
+    const tStart = Date.now();
+
+    const tLlmStart = Date.now();
     const { text: agentText, shouldEnd } = await generateConversationResponse(session.messages, speechResult);
+    const llmMs = Date.now() - tLlmStart;
     addTurn(callSid, speechResult, agentText);
 
     const isEnd = shouldEnd || nextTurn >= agentConfig.maxTurns;
 
     // Generate TTS audio for the AI response
+    const tTtsStart = Date.now();
     const audioBuffer = await generateSpeech(agentText, agentConfig);
+    const ttsMs = Date.now() - tTtsStart;
     const audioId = audioBuffer ? storeAudio(audioBuffer, "audio/wav") : undefined;
 
     if (isEnd) {
@@ -143,7 +153,21 @@ async function processConversationJob(jobId: string, speechResult: string): Prom
       isEnd,
     });
 
-    logger.info({ jobId, leadId, turn: nextTurn, isEnd }, "Conversation job completed");
+    const totalMs = Date.now() - tStart;
+    logger.info(
+      {
+        jobId,
+        leadId,
+        turn: nextTurn,
+        isEnd,
+        llmMs,
+        ttsMs,
+        totalMs,
+        agentChars: agentText.length,
+        audioBytes: audioBuffer?.length ?? 0,
+      },
+      "Conversation job completed",
+    );
   } catch (err) {
     logger.error({ err, jobId, leadId }, "Conversation job failed");
     jobs.set(jobId, { ...job, status: "error" });

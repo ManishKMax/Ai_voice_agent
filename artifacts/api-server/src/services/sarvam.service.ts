@@ -6,20 +6,25 @@ import type { ConversationMessage } from "./conversation-state.js";
 const STT_URL = "https://api.sarvam.ai/speech-to-text";
 const TTS_URL = "https://api.sarvam.ai/text-to-speech";
 const CHAT_URL = "https://api.sarvam.ai/v1/chat/completions";
-// Conversation model: default to `sarvam-m` (24B, no thinking, ~1-2s response).
-// `sarvam-105b` is a thinking model that takes 8-14s per turn — too slow for
-// real-time voice. Override with SARVAM_CHAT_MODEL if you want to experiment.
-const CHAT_MODEL_CONVERSATION = process.env.SARVAM_CHAT_MODEL ?? "sarvam-m";
-// Analysis runs after the call ends, so latency is fine — keep the smarter model.
-const CHAT_MODEL_ANALYSIS = process.env.SARVAM_ANALYSIS_MODEL ?? "sarvam-105b";
-// Both `sarvam-m` and `sarvam-105b` are reasoning models that emit a
-// <think>...</think> block before the actual reply (verified May 2026 — no
-// API switch can disable it). The thinking block alone commonly consumes
-// 200-500 tokens, so 300 max_tokens leaves nothing for the spoken reply
-// (finish_reason=length, content stuck inside <think>). 1500 gives the model
-// room to think *and* answer; we still strip the <think> block via
-// stripThinking() and truncate to 480 chars before TTS.
-const CHAT_MAX_TOKENS_CONVERSATION = 1500;
+// Conversation model: default to `sarvam-30b` — verified May 2026 to be the
+// fastest *and* cleanest option for live voice:
+//   sarvam-30b  : ~1.0s, NO <think> block, native Hinglish ✅
+//   sarvam-m    : ~2.2s, always emits <think> (must strip), eats 200-500 tokens
+//   sarvam-105b : ~50s, way too slow for live voice (still ok for analysis)
+// Override with SARVAM_CHAT_MODEL.
+const CHAT_MODEL_CONVERSATION = process.env.SARVAM_CHAT_MODEL ?? "sarvam-30b";
+// Analysis runs after the call ends so latency matters less, but sarvam-30b
+// is also clean+fast for JSON, so default to it. Override via env.
+const CHAT_MODEL_ANALYSIS = process.env.SARVAM_ANALYSIS_MODEL ?? "sarvam-30b";
+// Token budgets per model — empirically tuned (May 2026):
+//   sarvam-30b : 1024 is the sweet spot. Lower (256/512) silently fails with
+//                empty content + finish_reason=length on long system prompts;
+//                higher (2048) regularly times out at ~15s with empty output.
+//                1024 lands clean replies in ~1s.
+//   sarvam-m / sarvam-105b: thinking models — 1500 leaves room to think AND
+//                answer. <think> block alone eats 200-500 tokens.
+const CHAT_MAX_TOKENS_CONVERSATION =
+  CHAT_MODEL_CONVERSATION === "sarvam-30b" ? 1024 : 1500;
 const TTS_MODEL = "bulbul:v3";
 const STT_MODEL = "saaras:v3";
 
@@ -146,25 +151,73 @@ export async function generateConversationResponse(
     { role: "user" as const, content: userInput },
   ];
 
+  // Try the fast primary model first, then fall back to sarvam-m if it returns
+  // empty content. sarvam-30b is ~1s on short prompts but on long multi-turn
+  // contexts it sometimes burns the entire token budget producing nothing —
+  // sarvam-m is slower (~2-3s) but reliably emits content (with <think>).
+  const primary = await callSarvamChat(
+    CHAT_MODEL_CONVERSATION,
+    fullMessages,
+    CHAT_MAX_TOKENS_CONVERSATION,
+  );
+  if (primary.text) {
+    return primary;
+  }
+
+  // Primary failed (empty/error). If we were already on sarvam-m there's
+  // nothing better to try — return soft filler to keep call alive.
+  if (CHAT_MODEL_CONVERSATION === "sarvam-m") {
+    logger.warn(
+      { primaryReason: primary.failureReason },
+      "Primary chat returned empty — no fallback available, soft retry filler",
+    );
+    return { text: "Sorry, ek second — kya aap dohra sakte hain?", shouldEnd: false };
+  }
+
+  logger.warn(
+    { primaryReason: primary.failureReason },
+    "Primary chat (sarvam-30b) empty — falling back to sarvam-m",
+  );
+  const fallback = await callSarvamChat("sarvam-m", fullMessages, 1500);
+  if (fallback.text) {
+    return fallback;
+  }
+
+  logger.warn(
+    { fallbackReason: fallback.failureReason },
+    "Both primary and fallback chat returned empty — soft retry filler",
+  );
+  return { text: "Sorry, ek second — kya aap dohra sakte hain?", shouldEnd: false };
+}
+
+/**
+ * Single Sarvam chat call. Returns text="" if the call failed or produced
+ * empty content (after <think> stripping). Caller decides whether to retry.
+ */
+async function callSarvamChat(
+  model: string,
+  messages: ConversationMessage[],
+  maxTokens: number,
+): Promise<{ text: string; shouldEnd: boolean; failureReason?: string }> {
   try {
     const response = await fetch(CHAT_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "api-subscription-key": config.sarvam.apiKey,
+        "api-subscription-key": config.sarvam.apiKey!,
       },
       body: JSON.stringify({
-        model: CHAT_MODEL_CONVERSATION,
-        messages: fullMessages,
+        model,
+        messages,
         temperature: 0.7,
-        max_tokens: CHAT_MAX_TOKENS_CONVERSATION,
+        max_tokens: maxTokens,
       }),
     });
 
     if (!response.ok) {
       const err = await response.text();
-      logger.error({ status: response.status, err }, "Sarvam chat request failed");
-      return { text: "Thank you for your time. Goodbye!", shouldEnd: true };
+      logger.error({ model, status: response.status, err }, "Sarvam chat request failed");
+      return { text: "", shouldEnd: false, failureReason: `http_${response.status}` };
     }
 
     const data = (await response.json()) as {
@@ -175,27 +228,30 @@ export async function generateConversationResponse(
     };
 
     const raw = data.choices[0]?.message?.content ?? "";
-    // Strip <think>...</think> reasoning blocks before doing anything else —
-    // sarvam-m always emits them and they must NEVER reach TTS.
+    // Strip <think>...</think> reasoning blocks — sarvam-m always emits them
+    // and they must NEVER reach TTS.
     const cleaned = stripThinking(raw);
     const shouldEnd = cleaned.startsWith("[DONE]");
     const text = cleaned.replace(/^\[DONE\]\s*/i, "").trim();
 
-    if (!text) {
-      logger.warn(
-        {
-          rawLength: raw.length,
-          finishReason: data.choices[0]?.finish_reason,
-          rawPreview: raw.slice(0, 200),
-        },
-        "Sarvam chat returned empty content after stripping <think> — falling back to goodbye",
-      );
+    // Honour [DONE] even if the model forgot to include a farewell — it's
+    // a valid termination signal, not a failure. Substitute a polite goodbye.
+    if (shouldEnd) {
+      return { text: text || "Thank you for your time. Goodbye!", shouldEnd: true };
     }
 
-    return { text: text || "Thank you for your time. Goodbye!", shouldEnd };
+    if (!text) {
+      return {
+        text: "",
+        shouldEnd: false,
+        failureReason: `empty_${data.choices[0]?.finish_reason ?? "unknown"}_raw${raw.length}`,
+      };
+    }
+
+    return { text, shouldEnd };
   } catch (err) {
-    logger.error({ err }, "Sarvam conversation response exception");
-    return { text: "Thank you for your time. Goodbye!", shouldEnd: true };
+    logger.error({ err, model }, "Sarvam conversation response exception");
+    return { text: "", shouldEnd: false, failureReason: "exception" };
   }
 }
 

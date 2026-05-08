@@ -16,6 +16,7 @@ import {
   peakPcm16,
   writeWavPcm16,
 } from "../../audio/codec.js";
+import { transcribePcm16 } from "../../services/sarvam-stt-ws.client.js";
 
 const CAPTURE_ROOT = "/tmp/audio-captures";
 
@@ -36,6 +37,16 @@ interface CaptureSummary {
   completedAt: number | null;
   status: "in_progress" | "complete" | "failed";
   error?: string;
+  /** Populated when the request set ?transcribe=true. */
+  transcription?: {
+    text: string;
+    language: string | null;
+    requestId: string | null;
+    latencyMs: number;
+    /** Future-proof: array of partials if/when Sarvam ships streaming STT. */
+    partials: { text: string; timestampMs: number }[];
+    error?: string;
+  };
 }
 
 interface PendingCapture {
@@ -49,6 +60,8 @@ interface PendingCapture {
   rmsValues: number[];
   silentChunkCount: number;
   format: { encoding: string; sampleRate: number; channels: number };
+  transcribe: boolean;
+  language: string;
   resolve: (summary: CaptureSummary) => void;
   reject: (err: Error) => void;
   timer: NodeJS.Timeout | null;
@@ -165,6 +178,54 @@ async function finaliseCapture(id: string, status: "complete" | "failed", errorM
       ...(errorMsg ? { error: errorMsg } : {}),
     };
 
+    // Optional: pipe normalized PCM through Sarvam STT WS and embed the
+    // transcript in the summary. This proves the Phase-1 → Phase-2 audio
+    // path end-to-end on real call audio.
+    if (cap.transcribe && status === "complete" && normBuf.length > 0) {
+      const sttStartedAt = Date.now();
+      logger.info(
+        { captureId: id, language: cap.language, pcmBytes: normBuf.length },
+        "stt_partial_received: starting Sarvam STT WS request",
+      );
+      try {
+        const final = await transcribePcm16({
+          pcm16: normBuf,
+          sampleRate: 16000,
+          language: cap.language,
+        });
+        summary.transcription = {
+          text: final.text,
+          language: final.language,
+          requestId: final.requestId,
+          latencyMs: final.latencyMs,
+          partials: [],
+        };
+        logger.info(
+          {
+            captureId: id,
+            sttLatencyMs: final.latencyMs,
+            transcriptLen: final.text.length,
+            wallClockMs: Date.now() - sttStartedAt,
+          },
+          "stt_final_received",
+        );
+      } catch (err) {
+        const e = err as Error;
+        summary.transcription = {
+          text: "",
+          language: null,
+          requestId: null,
+          latencyMs: Date.now() - sttStartedAt,
+          partials: [],
+          error: e.message,
+        };
+        logger.warn(
+          { err: e, captureId: id, sarvam_ws_errors: e.message },
+          "stt_request_failed",
+        );
+      }
+    }
+
     await fs.writeFile(summaryPath, JSON.stringify(summary, null, 2));
     summariesById.set(id, summary);
     while (summariesById.size > MAX_RETAINED_SUMMARIES) {
@@ -195,9 +256,23 @@ async function finaliseCapture(id: string, status: "complete" | "failed", errorM
 
 /** POST /api/debug/audio-capture/start */
 export async function startAudioCapture(req: Request, res: Response): Promise<void> {
-  const body = (req.body ?? {}) as { to?: string; durationMs?: number };
+  const body = (req.body ?? {}) as {
+    to?: string;
+    durationMs?: number;
+    transcribe?: boolean;
+    language?: string;
+  };
   const to = (body.to ?? "").trim();
   const durationMs = Math.min(60_000, Math.max(2_000, Number(body.durationMs ?? 10_000)));
+  // ?transcribe=true OR body.transcribe=true → run captured audio through
+  // Sarvam STT WS and embed the transcript in the response summary.
+  const transcribe =
+    body.transcribe === true ||
+    String(req.query["transcribe"] ?? "").toLowerCase() === "true";
+  const language =
+    (typeof body.language === "string" && body.language.trim()) ||
+    (typeof req.query["language"] === "string" && (req.query["language"] as string).trim()) ||
+    "en-IN";
 
   if (!to) {
     res.status(400).json({ error: "Missing required field: to (E.164 phone)" });
@@ -224,6 +299,8 @@ export async function startAudioCapture(req: Request, res: Response): Promise<vo
       rmsValues: [],
       silentChunkCount: 0,
       format: { encoding: "audio/x-mulaw", sampleRate: 8000, channels: 1 },
+      transcribe,
+      language,
       resolve,
       reject,
       timer: null,

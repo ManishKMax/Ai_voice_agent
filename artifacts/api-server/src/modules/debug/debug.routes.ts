@@ -6,6 +6,7 @@ import {
   getAudioCapture,
   getAudioCaptureFile,
 } from "./audio-capture.controller.js";
+import { ttsStream } from "./tts-stream.controller.js";
 
 const router: IRouter = Router();
 
@@ -48,6 +49,15 @@ router.get(
   authMiddleware,
   requireRole("COMPANY_ADMIN", "SUPER_ADMIN"),
   getAudioCaptureFile,
+);
+
+// Phase 2: streaming Sarvam TTS WS — synthesize text and stream MP3 back.
+router.post(
+  "/tts-stream",
+  debugEnabledGate,
+  authMiddleware,
+  requireRole("COMPANY_ADMIN", "SUPER_ADMIN"),
+  ttsStream,
 );
 
 export default router;

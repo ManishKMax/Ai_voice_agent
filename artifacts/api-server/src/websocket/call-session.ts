@@ -367,7 +367,7 @@ class CallSession {
             : "Sorry, the line is a bit unclear — could you repeat that?";
         // Reset turn buffers so the re-prompt's listening window starts fresh.
         this.resetTurnBuffers();
-        await this.speakAndAdvance(rePrompt, /*isOpening*/ false, /*countAsTurn*/ false);
+        await this.speakAndAdvance(rePrompt, /*isOpening*/ false);
         return;
       }
       const remaining = Math.max(2000, MAX_LISTEN_MS - elapsedMs);
@@ -414,7 +414,7 @@ class CallSession {
       agentConfig.language === "hi-IN" || agentConfig.language === "en-IN"
         ? "Hello, kya aap sun rahe hain?"
         : "Hello, are you still there?";
-    await this.speakAndAdvance(rePrompt, /*isOpening*/ false, /*countAsTurn*/ false);
+    await this.speakAndAdvance(rePrompt, /*isOpening*/ false);
   }
 
   private async flushAndProcess(reason: string): Promise<void> {
@@ -514,7 +514,6 @@ class CallSession {
       await this.speakAndAdvance(
         "Sorry, kya aap dohra sakte hain?",
         /*isOpening*/ false,
-        /*countAsTurn*/ false,
       );
       return;
     }
@@ -558,18 +557,13 @@ class CallSession {
     await this.speakAndAdvance(agentText, /*isOpening*/ false);
   }
 
-  private async speakAndAdvance(
-    text: string,
-    _isOpening: boolean,
-    countAsTurn = true,
-  ): Promise<void> {
+  private async speakAndAdvance(text: string, _isOpening: boolean): Promise<void> {
     if (this.cancelled) return;
     this.transition("BOT_SPEAKING");
     this.botSpeakingStartMs = performance.now();
     await this.streamTtsToTwilio(text);
     if (this.cancelled) return;
     this.botSpeakingEndMs = performance.now();
-    void countAsTurn; // currently informational only
 
     this.transition("WAIT_AFTER_BOT_SPEECH");
     this.postBotTimer = setTimeout(() => {

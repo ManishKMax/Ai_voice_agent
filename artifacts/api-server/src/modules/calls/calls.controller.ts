@@ -7,8 +7,8 @@ import {
   generateRespondTwiML,
   generateEndCallTwiML,
   generateSayTwiML,
-  generateMediaStreamTwiML,
 } from "../../services/twilio.service.js";
+import { resolveProviderForLead } from "../../voice/ivr/index.js";
 import { generateSpeech, generateConversationResponse, analyzeTranscript } from "../../services/sarvam.service.js";
 import { storeAudio, getAudio, consumePendingGreeting } from "../../services/audio-cache.js";
 import {
@@ -189,8 +189,17 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
   // intact behind the flag and will be archived in a later cleanup.
   const pipeline = (process.env["VOICE_PIPELINE"] ?? "gather").toLowerCase();
   if (pipeline === "ws") {
-    req.log.info({ leadId, callSid, pipeline }, "Voice webhook — routing to WS pipeline");
-    xmlResponse(res, generateMediaStreamTwiML(leadId || undefined));
+    // Phase 4: ask the per-tenant IVR adapter to produce its connect
+    // response (TwiML for Twilio, app-bazaar XML for Exotel, etc.).
+    // resolveProviderForLead falls back to Twilio for unknown tenants.
+    const provider = await resolveProviderForLead(leadId);
+    const { contentType, body } = provider.generateConnectResponse(leadId || undefined);
+    req.log.info(
+      { leadId, callSid, pipeline, providerId: provider.id },
+      "Voice webhook — routing to WS pipeline",
+    );
+    res.setHeader("Content-Type", contentType);
+    res.send(body);
     return;
   }
 
@@ -259,10 +268,18 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
 // WebSocket so we can run our own STT/VAD/LLM pipeline. Phase 1 only stands
 // up the plumbing — Phase 2+ will wire Sarvam STT/TTS bridges on top.
 
-export function voiceWebhookV2(req: Request, res: Response): void {
+export async function voiceWebhookV2(req: Request, res: Response): Promise<void> {
   const leadId = parseInt((req.query["leadId"] as string) ?? "0");
-  req.log.info({ leadId }, "Voice v2 webhook — connecting to media stream");
-  xmlResponse(res, generateMediaStreamTwiML(leadId || undefined));
+  // Provider-agnostic v2 webhook: the connect-response shape comes from the
+  // per-tenant IvrProvider so an Exotel-flagged tenant doesn't get TwiML.
+  const provider = await resolveProviderForLead(leadId);
+  const { contentType, body } = provider.generateConnectResponse(leadId || undefined);
+  req.log.info(
+    { leadId, providerId: provider.id },
+    "Voice v2 webhook — connecting to media stream",
+  );
+  res.setHeader("Content-Type", contentType);
+  res.send(body);
 }
 
 // ── Gather Webhook (handles lead's spoken response) ─────────────────────────

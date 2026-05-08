@@ -181,6 +181,62 @@ Call ends → transcript saved → Sarvam AI analysis runs
 - `services/exotel.service.ts` — `initiateExotelCall()` via Connect Two Numbers API
 - `calls.service.dispatchCall()` routes by `lead.tenantId` → tenant.telephonyProvider
 
+### IVR provider abstraction (Phase 4)
+
+The voice/brain WS pipeline is decoupled from any specific carrier via the
+`IvrProvider` interface in `artifacts/api-server/src/voice/ivr/types.ts`.
+`CallSession` consumes a normalised PCM s16le @ 8 kHz frame stream and emits
+PCM s16le @ 8 kHz frames; the provider does codec/envelope translation.
+
+- `voice/ivr/twilio-provider.ts` — Twilio Media Streams (μ-law 8 kHz, TwiML
+  `<Connect><Stream>`). Byte-identical to Phase-3 output.
+- `voice/ivr/exotel-provider.ts` — Exotel Voicebot Streaming **scaffold**.
+  Compiles, registered in the registry, but contains explicit `TODO(exotel)`
+  comments where live wiring is required (envelope keys differ from Twilio's
+  camelCase, default codec is PCM not μ-law, and the connect XML uses
+  `<Voicebot>` not `<Connect><Stream>`).
+- `voice/ivr/index.ts` — registry + `resolveProviderForLead(leadId)` which
+  joins `leads → tenants` and returns the right provider singleton (default
+  Twilio for platform calls and unknown values). **Safety gate**: Exotel
+  selection requires `EXOTEL_WS_ENABLED=1` because `media-stream.ts` still
+  parses Twilio envelopes and the Exotel adapter is unverified — without
+  the env flag, Exotel-flagged tenants fall back to Twilio with a logged
+  warning.
+
+Webhook flow when `VOICE_PIPELINE=ws`:
+1. `POST /api/voice` calls `resolveProviderForLead(leadId)`,
+2. uses `provider.generateConnectResponse(leadId)` for the carrier-specific
+   webhook body & content-type (TwiML for Twilio, app-bazaar XML for Exotel).
+3. The `MediaStream` WS subscriber instantiates `CallSession`, which calls
+   `resolveProviderForLead(leadId)` again at start() and uses
+   `provider.decodeInboundFrame()` / `provider.encodeOutboundFrame()` for
+   every frame, plus `provider.outboundFrameBytesPcm()` /
+   `outboundFrameIntervalMs()` for chunking.
+
+Adding a new IVR (e.g. Plivo):
+1. Implement `IvrProvider` in `voice/ivr/plivo-provider.ts`.
+2. Register it in the `REGISTRY` map of `voice/ivr/index.ts`.
+3. Extend the `IvrProviderId` union in `voice/ivr/types.ts`.
+4. Add the matching `tenants.telephony_provider` enum value (already a
+   `text` column — no schema change needed for new providers).
+
+### Voice acceptance test
+
+`pnpm --filter @workspace/scripts run voice-acceptance-test` replays a
+fixture audio buffer (synthetic 1 kHz tone by default; pass `--wav <path>`
+for a real recording) through the same per-frame pipeline `CallSession`
+uses and asserts:
+- (a) inbound audio frames are received,
+- (b) inbound payloads decode to non-empty PCM s16le @ 8 kHz,
+- (c) per-frame RMS rises above `VOICE_SPEECH_RMS_THRESHOLD`,
+- (d) the audio reaches STT (bytes are flushed upstream),
+- (e) Sarvam STT returns a final transcript (SKIP if `SARVAM_API_KEY` unset),
+- (f) the audio-health "I could not hear you" gate does NOT fire on healthy
+  audio.
+
+The script makes no real outbound calls. Failed STT runs save the offending
+WAV under `tmp/voice-acceptance/` for inspection.
+
 ## Environment Variables Required
 
 - `TWILIO_ACCOUNT_SID` — Twilio Console

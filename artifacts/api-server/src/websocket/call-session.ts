@@ -9,11 +9,14 @@ import {
   type MediaStreamSession,
 } from "./media-stream.js";
 import {
-  muLawToPcm16,
   upsample8kTo16k,
-  pcm16ToMuLaw,
   rmsPcm16,
 } from "../audio/codec.js";
+import {
+  getIvrProvider,
+  resolveProviderForLead,
+  type IvrProvider,
+} from "../voice/ivr/index.js";
 import {
   generateSpeech,
   generateConversationResponse,
@@ -69,8 +72,6 @@ type State =
   | "PROCESS_TRANSCRIPT"
   | "ENDED";
 
-const FRAME_BYTES = 160;             // 20 ms @ 8 kHz μ-law (Twilio frame size)
-const FRAME_INTERVAL_MS = 20;
 const MAX_TURNS_DEFAULT = 6;
 
 /**
@@ -121,6 +122,13 @@ class CallSession {
   private leadId: number;
   private leadName = "there";
   private turnId = 0;
+  /**
+   * Phase 4: which IVR adapter handles inbound/outbound codec + webhook
+   * envelope for this call. Defaulted to Twilio for safety; replaced in
+   * start() with the per-tenant resolution. Not readonly because start()
+   * may swap it in based on `tenants.telephony_provider`.
+   */
+  private provider: IvrProvider = getIvrProvider("twilio");
 
   // Per-turn capture buffers (PCM s16le 8 kHz frames concatenated; we upsample
   // once at flush rather than per-frame to amortise cost).
@@ -158,6 +166,16 @@ class CallSession {
     try {
       const lead = this.leadId ? await getLeadById(this.leadId) : null;
       this.leadName = lead?.name ?? "there";
+      // Resolve the per-tenant IVR adapter — Twilio for platform calls and
+      // Twilio-flagged tenants, Exotel scaffold for Exotel-flagged tenants.
+      // Fail-safe: any DB error keeps the Twilio default already on `this`.
+      if (this.leadId) {
+        this.provider = await resolveProviderForLead(this.leadId);
+        logger.info(
+          { call_id: this.session.callSid, providerId: this.provider.id },
+          "call_session_provider_resolved",
+        );
+      }
 
       const greetingText = buildGreetingText(agentConfig, this.leadName);
       const systemPrompt = buildSystemPrompt(agentConfig, this.leadName, greetingText);
@@ -190,7 +208,7 @@ class CallSession {
     if (this.cancelled) return;
     if (this.state !== "LISTENING" && this.state !== "USER_SPEECH_DETECTED") return;
 
-    const pcm8 = muLawToPcm16(payload);
+    const pcm8 = this.provider.decodeInboundFrame(payload);
     const rms = rmsPcm16(pcm8);
     this.pcmFrames.push(pcm8);
     this.rmsValues.push(rms);
@@ -416,7 +434,9 @@ class CallSession {
 
     const pcm8 = Buffer.concat(this.pcmFrames);
     const chunkCount = this.pcmFrames.length;
-    const totalAudioMs = chunkCount * FRAME_INTERVAL_MS;
+    // Each inbound frame is one provider outboundFrameIntervalMs() worth of
+    // audio (20 ms for both Twilio μ-law and the Exotel scaffold).
+    const totalAudioMs = chunkCount * this.provider.outboundFrameIntervalMs();
     const rmsMin = this.rmsValues.length ? Math.min(...this.rmsValues) : 0;
     const rmsMax = this.rmsValues.length ? Math.max(...this.rmsValues) : 0;
     const rmsAvg = this.rmsValues.length
@@ -589,21 +609,23 @@ class CallSession {
     // future change adding a `LIST`/`INFO`/`fact` chunk before `data` would
     // silently corrupt every TTS playback if we hardcoded the offset.
     const pcm = extractWavPcm(wav) ?? wav.subarray(44);
-    const mulaw = pcm16ToMuLaw(pcm);
 
-    // Send 20 ms frames paced at real-time. We keep a tiny lead buffer (3
-    // frames) so brief event-loop hiccups don't produce audible gaps; Twilio
-    // tolerates small bursts.
-    const totalFrames = Math.ceil(mulaw.length / FRAME_BYTES);
+    // Phase 4: chunk PCM (not μ-law) at the provider's per-frame size, encode
+    // via the provider, and pace at real-time. CallSession no longer knows
+    // anything about μ-law — that's the Twilio adapter's responsibility.
+    const frameBytesPcm = this.provider.outboundFrameBytesPcm();
+    const frameIntervalMs = this.provider.outboundFrameIntervalMs();
+    const totalFrames = Math.ceil(pcm.length / frameBytesPcm);
     let sent = 0;
     const startedAt = performance.now();
     while (sent < totalFrames) {
       if (this.cancelled || this.ttsStopRequested) return;
-      const offset = sent * FRAME_BYTES;
-      const slice = mulaw.subarray(offset, Math.min(offset + FRAME_BYTES, mulaw.length));
-      this.session.sendAudio(slice);
+      const offset = sent * frameBytesPcm;
+      const pcmSlice = pcm.subarray(offset, Math.min(offset + frameBytesPcm, pcm.length));
+      const wireSlice = this.provider.encodeOutboundFrame(pcmSlice);
+      this.session.sendAudio(wireSlice);
       sent++;
-      const targetMs = sent * FRAME_INTERVAL_MS;
+      const targetMs = sent * frameIntervalMs;
       const elapsedMs = performance.now() - startedAt;
       const drift = targetMs - elapsedMs;
       if (drift > 1) {

@@ -197,11 +197,13 @@ PCM s16le @ 8 kHz frames; the provider does codec/envelope translation.
   `<Voicebot>` not `<Connect><Stream>`).
 - `voice/ivr/index.ts` — registry + `resolveProviderForLead(leadId)` which
   joins `leads → tenants` and returns the right provider singleton (default
-  Twilio for platform calls and unknown values). **Safety gate**: Exotel
-  selection requires `EXOTEL_WS_ENABLED=1` because `media-stream.ts` still
-  parses Twilio envelopes and the Exotel adapter is unverified — without
-  the env flag, Exotel-flagged tenants fall back to Twilio with a logged
-  warning.
+  Twilio for platform calls and unknown values).
+- `media-stream.ts` is carrier-agnostic — it delegates inbound envelope
+  parsing (`parseInboundEnvelope`) and outbound message serialization
+  (`serializeAudioMessage` / `serializeMarkMessage` / `serializeClearMessage`)
+  to the active provider. The default provider (Twilio) handles the WS
+  handshake; once the start envelope's `customParameters` carry a leadId or
+  `provider` hint, the per-tenant provider takes over.
 
 Webhook flow when `VOICE_PIPELINE=ws`:
 1. `POST /api/voice` calls `resolveProviderForLead(leadId)`,

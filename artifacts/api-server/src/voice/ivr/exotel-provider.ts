@@ -1,28 +1,25 @@
 import { logger } from "../../lib/logger.js";
 import { muLawToPcm16, pcm16ToMuLaw } from "../../audio/codec.js";
-import type { IvrProvider } from "./types.js";
+import type { IvrEnvelope, IvrProvider } from "./types.js";
 
 /**
  * Exotel Voicebot Streaming adapter — SCAFFOLD ONLY.
  *
  * Wire format reference (Exotel Voicebot Applet docs):
- *   - JSON envelope similar to Twilio but with different field names:
- *       { event: "start",  stream_sid, call_sid, ... }
- *       { event: "media",  media: { payload (base64), chunk, timestamp } }
- *       { event: "stop",   ... }
- *     Note the snake_case keys. media-stream.ts currently parses Twilio's
- *     camelCase envelope only; full Exotel support requires either:
- *       (a) a separate WS endpoint with its own parser, or
- *       (b) lifting envelope parsing into the IvrProvider.
- *     We've chosen (b) for the long term but the refactor is out of scope
- *     for Phase 4 — see TODO(exotel) below.
+ *   - JSON envelope similar to Twilio but with snake_case keys:
+ *       { event: "start",  stream_sid, call_sid,
+ *         start: { custom_parameters, media_format: {...} } }
+ *       { event: "media",  media: { payload (b64), chunk, timestamp } }
+ *       { event: "mark",   mark: { name } }
+ *       { event: "stop" }
  *
  *   - Default codec: 8 kHz mono 16-bit signed-PCM (NOT μ-law!) per Exotel's
  *     Voicebot Applet defaults. Some Exotel accounts can be configured to
  *     stream μ-law instead; the provider should detect this from the
  *     `start` envelope's media format and adapt. For the scaffold we
  *     assume μ-law to mirror Twilio so the codec helpers exercise the
- *     same code paths during typecheck.
+ *     same code paths during typecheck — see TODO(exotel) in
+ *     decode/encode.
  *
  *   - Webhook envelope: app-bazaar / passthru XML, NOT TwiML. Looks like:
  *       <Response><Voicebot url="wss://..." /></Response>
@@ -33,35 +30,30 @@ import type { IvrProvider } from "./types.js";
  *   - Forces the IvrProvider interface to be honest (a non-Twilio impl
  *     compiling against the same contract proves the abstraction works).
  *   - Gives a future task a concrete file to edit instead of a blank page.
- *   - Lets `dispatchIvrProvider("exotel")` succeed in dev, surfacing
- *     wiring bugs early instead of at integration time.
+ *
+ * IMPORTANT: every method below is marked TODO(exotel) where it diverges
+ * from the live spec. None of this code has been verified against a real
+ * Exotel account.
  */
 export class ExotelMediaStreamsProvider implements IvrProvider {
   readonly id = "exotel" as const;
   readonly name = "Exotel Voicebot Streaming (scaffold)";
 
+  // ── Codec ────────────────────────────────────────────────────────────────
+
   decodeInboundFrame(payload: Buffer): Buffer {
-    // TODO(exotel): Detect the actual encoding from the carrier `start`
-    // envelope's mediaFormat. Exotel defaults to PCM s16le but is
-    // commonly configured to μ-law for parity with Twilio. For the
-    // scaffold we assume μ-law so the type-check exercises the codec
-    // path; real production wiring MUST branch on the negotiated
-    // format and bypass the codec when payload is already PCM.
-    logger.debug({ providerId: this.id }, "exotel_decode_inbound (scaffold)");
+    // TODO(exotel): branch on the negotiated mediaFormat.encoding from the
+    // `start` envelope. For PCM, return payload unchanged. For μ-law,
+    // decode. Until verified we assume μ-law for parity with Twilio.
     return muLawToPcm16(payload);
   }
 
   encodeOutboundFrame(pcm8k: Buffer): Buffer {
-    // TODO(exotel): As above — when the carrier negotiated PCM, return
-    // pcm8k unchanged. When μ-law, encode. Until that branch is wired
-    // we always μ-law-encode so an Exotel-flagged tenant produces
-    // sensible bytes if the provider somehow reaches production by
-    // accident.
+    // TODO(exotel): if the carrier negotiated PCM, return pcm8k unchanged.
     return pcm16ToMuLaw(pcm8k);
   }
 
   outboundFrameBytesPcm(): number {
-    // Exotel Voicebot also uses 20 ms frames @ 8 kHz. Same maths as Twilio.
     return 320;
   }
 
@@ -69,13 +61,118 @@ export class ExotelMediaStreamsProvider implements IvrProvider {
     return 20;
   }
 
+  // ── WS envelope ──────────────────────────────────────────────────────────
+
+  parseInboundEnvelope(raw: string): IvrEnvelope | null {
+    // TODO(exotel): verify exact field names against a real Exotel session.
+    // The Voicebot docs use snake_case; we accept both snake_case and the
+    // Twilio-style camelCase as a defensive convenience while the spec
+    // is unverified.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      logger.warn({ err, providerId: this.id }, "exotel_envelope_non_json");
+      return null;
+    }
+    if (!isRecord(parsed)) return null;
+    const event = parsed["event"];
+    switch (event) {
+      case "connected":
+        return { kind: "connected" };
+      case "start": {
+        const start = isRecord(parsed["start"]) ? parsed["start"] : parsed;
+        const streamSid = pickString(start, ["stream_sid", "streamSid"]) ?? "";
+        const callSid = pickString(start, ["call_sid", "callSid"]) ?? "";
+        if (!streamSid || !callSid) return null;
+        const cpRaw =
+          (isRecord(start["custom_parameters"]) ? start["custom_parameters"] : null) ??
+          (isRecord(start["customParameters"]) ? start["customParameters"] : null);
+        const customParameters: Record<string, string> = {};
+        if (cpRaw) {
+          for (const [k, v] of Object.entries(cpRaw)) {
+            if (typeof v === "string") customParameters[k] = v;
+            else if (typeof v === "number") customParameters[k] = String(v);
+          }
+        }
+        const mfRaw =
+          (isRecord(start["media_format"]) ? start["media_format"] : null) ??
+          (isRecord(start["mediaFormat"]) ? start["mediaFormat"] : null) ??
+          {};
+        const sampleRate =
+          typeof mfRaw["sample_rate"] === "number"
+            ? mfRaw["sample_rate"]
+            : typeof mfRaw["sampleRate"] === "number"
+              ? mfRaw["sampleRate"]
+              : 8000;
+        return {
+          kind: "start",
+          streamSid,
+          callSid,
+          customParameters,
+          mediaFormat: {
+            // TODO(exotel): default is "audio/L16" (PCM) per Exotel docs;
+            // the scaffold reports μ-law to match the codec helpers we
+            // currently call.
+            encoding: typeof mfRaw["encoding"] === "string" ? mfRaw["encoding"] : "audio/x-mulaw",
+            sampleRate,
+            channels: typeof mfRaw["channels"] === "number" ? mfRaw["channels"] : 1,
+          },
+        };
+      }
+      case "media": {
+        const media = isRecord(parsed["media"]) ? parsed["media"] : null;
+        if (!media) return null;
+        const payloadB64 = media["payload"];
+        if (typeof payloadB64 !== "string" || !payloadB64) return null;
+        const tsRaw = media["timestamp"];
+        const timestampMs =
+          typeof tsRaw === "number" ? tsRaw : typeof tsRaw === "string" ? Number(tsRaw) || 0 : 0;
+        return { kind: "media", payload: Buffer.from(payloadB64, "base64"), timestampMs };
+      }
+      case "mark": {
+        const mark = isRecord(parsed["mark"]) ? parsed["mark"] : null;
+        const name = mark && typeof mark["name"] === "string" ? mark["name"] : "";
+        return { kind: "mark", name };
+      }
+      case "stop":
+        return { kind: "stop" };
+      default:
+        return null;
+    }
+  }
+
+  serializeAudioMessage(streamSid: string, wireFrame: Buffer): string {
+    // TODO(exotel): verify Exotel's exact outbound envelope. Voicebot uses
+    // snake_case stream_sid; some apps prefer a top-level base64 payload.
+    return JSON.stringify({
+      event: "media",
+      stream_sid: streamSid,
+      media: { payload: wireFrame.toString("base64") },
+    });
+  }
+
+  serializeMarkMessage(streamSid: string, name: string): string {
+    // TODO(exotel): mark/sync semantics differ across Exotel apps. Some do
+    // not echo marks back. Caller treats "" as "skip send".
+    return JSON.stringify({ event: "mark", stream_sid: streamSid, mark: { name } });
+  }
+
+  serializeClearMessage(streamSid: string): string {
+    // TODO(exotel): no documented "clear buffered audio" message exists for
+    // Voicebot Streaming; closing the WS is the only verified way. Return
+    // an empty string so the caller skips the send.
+    void streamSid;
+    return "";
+  }
+
+  // ── Webhook ──────────────────────────────────────────────────────────────
+
   generateConnectResponse(leadId: number | undefined): { contentType: string; body: string } {
-    // TODO(exotel): The exact tag name and attributes are determined by
-    // the customer's Exotel App SID flow. The shape below is a
-    // best-effort placeholder pieced together from the Exotel
-    // Voicebot Streaming docs (https://developer.exotel.com/api/voicebot-streaming).
-    // Live testing MUST replace this with the verified format from a
-    // real Exotel account before Exotel calls are dispatched.
+    // TODO(exotel): the exact tag name and attributes are determined by the
+    // customer's Exotel App SID flow. Live testing MUST replace this with
+    // the verified format from a real Exotel account before Exotel calls
+    // are dispatched.
     const wsBase = (process.env["BASE_URL"] ?? "")
       .replace(/^https:/i, "wss:")
       .replace(/^http:/i, "ws:");
@@ -92,4 +189,16 @@ export class ExotelMediaStreamsProvider implements IvrProvider {
     );
     return { contentType: "application/xml", body };
   }
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function pickString(rec: Record<string, unknown>, keys: string[]): string | null {
+  for (const k of keys) {
+    const v = rec[k];
+    if (typeof v === "string" && v) return v;
+  }
+  return null;
 }

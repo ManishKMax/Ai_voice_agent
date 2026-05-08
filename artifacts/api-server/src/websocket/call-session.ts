@@ -116,7 +116,7 @@ interface PerTurnLog {
   sarvam_ws_errors: string | null;
 }
 
-class CallSession {
+export class CallSession {
   state: State = "IDLE";
   private session: MediaStreamSession;
   private leadId: number;

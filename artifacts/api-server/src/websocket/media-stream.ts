@@ -1,32 +1,34 @@
 import type { Server as HttpServer, IncomingMessage } from "http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { logger } from "../lib/logger.js";
-import { muLawToPcm16, rmsPcm16 } from "../audio/codec.js";
+import { rmsPcm16 } from "../audio/codec.js";
+import {
+  getDefaultIvrProvider,
+  getIvrProvider,
+  type IvrProvider,
+} from "../voice/ivr/index.js";
 
 /**
- * Twilio Media Streams WebSocket server.
+ * Carrier-agnostic Media Streams WebSocket server.
  *
- * Twilio establishes a bidirectional WS connection (TwiML <Connect><Stream/>)
- * and sends JSON envelopes:
- *   { event: "connected", protocol, version }
- *   { event: "start", start: { streamSid, callSid, mediaFormat: { encoding, sampleRate, channels }, ... } }
- *   { event: "media", media: { track, chunk, timestamp, payload (base64 μ-law 8kHz) } }
- *   { event: "stop", stop: { ... } }
+ * Phase 4: this server no longer parses Twilio envelopes inline. It instead
+ * delegates inbound envelope decoding and outbound message serialization to
+ * an `IvrProvider`. The default provider (Twilio) handles the WS handshake
+ * and the initial `start` envelope; once we extract the leadId from the
+ * start's customParameters we re-resolve the per-tenant provider, so the
+ * WS server's behavior matches the carrier the call was actually placed
+ * through.
  *
- * This server:
- *   - mounts on the existing HTTP server at /api/voice/stream
- *   - parses envelopes, decodes media payloads to raw μ-law buffers
- *   - exposes a per-call subscriber API so other modules (debug capture in
- *     Phase 1, Sarvam STT bridge in Phase 2+) can attach to a session
- *   - logs structured metadata on session open/close
+ * The WS path is shared across carriers — different providers may produce
+ * different connect XML, but they all point back at /api/voice/stream.
  */
 
 export const MEDIA_STREAM_PATH = "/api/voice/stream";
 
 export interface MediaStreamFormat {
-  encoding: string;        // typically "audio/x-mulaw"
-  sampleRate: number;      // typically 8000
-  channels: number;        // typically 1
+  encoding: string;
+  sampleRate: number;
+  channels: number;
 }
 
 export interface MediaStreamSession {
@@ -37,19 +39,19 @@ export interface MediaStreamSession {
   startedAt: number;
   chunkCount: number;
   totalAudioBytes: number;
-  /** Running sum of per-chunk RMS values (μ-law tracks only). */
   rmsSum: number;
-  /** Number of chunks whose RMS was sampled (used to compute average). */
   rmsCount: number;
-  /** True once stop has been signalled — guards against double-onStop. */
   stopped: boolean;
-  /** Send an outbound μ-law-encoded audio payload back to Twilio. */
-  sendAudio(muLawPayload: Buffer): void;
-  /** Send a Twilio "mark" event (echoed back when playback completes). */
+  /** The IvrProvider currently driving this session. May be re-resolved
+   * once the start envelope's customParameters reveal the leadId. */
+  provider: IvrProvider;
+  /** Send an outbound audio frame (carrier-encoded wire bytes). */
+  sendAudio(wirePayload: Buffer): void;
+  /** Send a "mark" / sync event. No-op if the provider has no equivalent. */
   sendMark(name: string): void;
-  /** Tell Twilio to discard any buffered outbound audio. */
+  /** Tell the carrier to discard buffered outbound audio. No-op if the
+   * provider has no equivalent. */
   clear(): void;
-  /** Close the underlying WebSocket. */
   close(): void;
 }
 
@@ -60,12 +62,6 @@ export interface MediaStreamHandler {
   onStop?(session: MediaStreamSession): void;
 }
 
-/**
- * Subscribers are matched by Twilio CallSid. The first subscriber whose
- * `match(callSid)` returns true wins for that call. This keeps the server
- * generic; Phase 1 uses it for debug capture, Phase 2+ for the live STT/TTS
- * bridge.
- */
 export interface MediaStreamSubscriber {
   match(callSid: string, customParameters: Record<string, string>): boolean;
   handler: MediaStreamHandler;
@@ -73,7 +69,6 @@ export interface MediaStreamSubscriber {
 
 const subscribers: MediaStreamSubscriber[] = [];
 
-/** Register a subscriber. Returns an unsubscribe function. */
 export function subscribeMediaStream(sub: MediaStreamSubscriber): () => void {
   subscribers.push(sub);
   return () => {
@@ -93,47 +88,41 @@ function pickSubscriber(callSid: string, params: Record<string, string>): MediaS
   return null;
 }
 
-function buildSession(ws: WebSocket, start: {
+interface StartArgs {
   streamSid: string;
   callSid: string;
-  customParameters?: Record<string, string>;
-  mediaFormat?: Partial<MediaStreamFormat>;
-}): MediaStreamSession {
-  const format: MediaStreamFormat = {
-    encoding: start.mediaFormat?.encoding ?? "audio/x-mulaw",
-    sampleRate: start.mediaFormat?.sampleRate ?? 8000,
-    channels: start.mediaFormat?.channels ?? 1,
-  };
+  customParameters: Record<string, string>;
+  mediaFormat: MediaStreamFormat;
+  provider: IvrProvider;
+}
+
+function buildSession(ws: WebSocket, args: StartArgs): MediaStreamSession {
   const session: MediaStreamSession = {
-    streamSid: start.streamSid,
-    callSid: start.callSid,
-    customParameters: start.customParameters ?? {},
-    format,
+    streamSid: args.streamSid,
+    callSid: args.callSid,
+    customParameters: args.customParameters,
+    format: args.mediaFormat,
     startedAt: Date.now(),
     chunkCount: 0,
     totalAudioBytes: 0,
     rmsSum: 0,
     rmsCount: 0,
     stopped: false,
+    provider: args.provider,
     sendAudio(payload: Buffer) {
       if (ws.readyState !== ws.OPEN) return;
-      ws.send(JSON.stringify({
-        event: "media",
-        streamSid: session.streamSid,
-        media: { payload: payload.toString("base64") },
-      }));
+      const msg = session.provider.serializeAudioMessage(session.streamSid, payload);
+      if (msg) ws.send(msg);
     },
     sendMark(name: string) {
       if (ws.readyState !== ws.OPEN) return;
-      ws.send(JSON.stringify({
-        event: "mark",
-        streamSid: session.streamSid,
-        mark: { name },
-      }));
+      const msg = session.provider.serializeMarkMessage(session.streamSid, name);
+      if (msg) ws.send(msg);
     },
     clear() {
       if (ws.readyState !== ws.OPEN) return;
-      ws.send(JSON.stringify({ event: "clear", streamSid: session.streamSid }));
+      const msg = session.provider.serializeClearMessage(session.streamSid);
+      if (msg) ws.send(msg);
     },
     close() {
       try { ws.close(); } catch { /* ignore */ }
@@ -147,7 +136,6 @@ export function attachMediaStreamServer(httpServer: HttpServer): void {
 
   httpServer.on("upgrade", (req: IncomingMessage, socket, head) => {
     const url = req.url ?? "";
-    // Strip query string; Twilio appends none, but be defensive.
     const path = url.split("?")[0];
     if (path !== MEDIA_STREAM_PATH) return;
     wss.handleUpgrade(req, socket, head, (ws) => {
@@ -158,10 +146,12 @@ export function attachMediaStreamServer(httpServer: HttpServer): void {
   wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     let session: MediaStreamSession | null = null;
     let subscriber: MediaStreamSubscriber | null = null;
+    // Use the default provider (Twilio) until the start envelope tells us
+    // which tenant the call belongs to. Switched in `start` below.
+    let provider: IvrProvider = getDefaultIvrProvider();
     const remote = req.socket.remoteAddress;
-    logger.info({ remote }, "MediaStream WS connection opened");
+    logger.info({ remote, providerId: provider.id }, "MediaStream WS connection opened");
 
-    /** Invoke subscriber.onStop at most once per session. */
     const notifyStop = (): void => {
       if (!session || session.stopped) return;
       session.stopped = true;
@@ -169,27 +159,47 @@ export function attachMediaStreamServer(httpServer: HttpServer): void {
     };
 
     ws.on("message", (raw) => {
-      const parsed = parseTwilioFrame(raw.toString());
-      if (!parsed) return;
-      const event = parsed.event;
+      const env = provider.parseInboundEnvelope(raw.toString());
+      if (!env) return;
 
-      switch (event) {
+      switch (env.kind) {
         case "connected":
           logger.info(
-            { protocol: parsed.protocol ?? null, version: parsed.version ?? null },
+            { protocol: env.protocol ?? null, version: env.version ?? null, providerId: provider.id },
             "MediaStream connected",
           );
           break;
 
         case "start": {
-          const start = parsed.start;
-          if (!start) return;
-          session = buildSession(ws, start);
+          // Re-resolve provider from leadId customParameter (string match
+          // against telephony_provider on the tenant). Falls back to the
+          // current default if leadId is absent or unrecognized.
+          const leadIdRaw = env.customParameters["leadId"];
+          const tenantProviderHint = env.customParameters["provider"];
+          if (tenantProviderHint) {
+            const next = getIvrProvider(tenantProviderHint);
+            if (next.id !== provider.id) {
+              logger.info(
+                { from: provider.id, to: next.id },
+                "MediaStream provider switched via customParameter",
+              );
+              provider = next;
+            }
+          }
+          session = buildSession(ws, {
+            streamSid: env.streamSid,
+            callSid: env.callSid,
+            customParameters: env.customParameters,
+            mediaFormat: env.mediaFormat,
+            provider,
+          });
           subscriber = pickSubscriber(session.callSid, session.customParameters);
           logger.info(
             {
               callSid: session.callSid,
               streamSid: session.streamSid,
+              providerId: provider.id,
+              leadId: leadIdRaw ?? null,
               inboundCodec: session.format.encoding,
               inboundSampleRate: session.format.sampleRate,
               inboundChannels: session.format.channels,
@@ -204,39 +214,40 @@ export function attachMediaStreamServer(httpServer: HttpServer): void {
 
         case "media": {
           if (!session) return;
-          const media = parsed.media;
-          const payloadB64 = media?.payload;
-          if (!payloadB64) return;
-          const payload = Buffer.from(payloadB64, "base64");
-          const ts = Number(media?.timestamp ?? 0);
           session.chunkCount++;
-          session.totalAudioBytes += payload.length;
-          // Cheap per-chunk audio-health metric (~few µs / 160-byte frame) so
-          // every call gets a canonical rmsAvg in its stop log without needing
-          // a subscriber to compute it.
-          if (session.format.encoding === "audio/x-mulaw") {
-            session.rmsSum += rmsPcm16(muLawToPcm16(payload));
+          session.totalAudioBytes += env.payload.length;
+          // Cheap per-chunk audio-health metric. We decode through the
+          // provider so this works for any carrier (Twilio μ-law, Exotel
+          // PCM, etc.) — failures (e.g. wrong codec) are logged but
+          // non-fatal so the call continues.
+          try {
+            const pcm = session.provider.decodeInboundFrame(env.payload);
+            session.rmsSum += rmsPcm16(pcm);
             session.rmsCount++;
+          } catch (err) {
+            logger.warn(
+              { err, providerId: session.provider.id, callSid: session.callSid },
+              "media_stream_rms_decode_failed",
+            );
           }
-          subscriber?.handler.onMedia?.(session, payload, ts);
+          subscriber?.handler.onMedia?.(session, env.payload, env.timestampMs);
           break;
         }
 
         case "mark": {
           if (!session) return;
-          const name = parsed.mark?.name ?? "";
-          subscriber?.handler.onMark?.(session, name);
+          subscriber?.handler.onMark?.(session, env.name);
           break;
         }
 
         case "stop": {
           if (session) {
             const elapsedMs = Date.now() - session.startedAt;
-            // For μ-law @ 8 kHz, 1 byte = 1 sample = 0.125 ms → totalMs = bytes * 0.125
-            const totalAudioMs =
-              session.format.encoding === "audio/x-mulaw"
-                ? session.totalAudioBytes / (session.format.sampleRate / 1000)
-                : 0;
+            // bytes → ms is codec-dependent. For 8 kHz PCM s16le it's
+            // bytes / (sampleRate*2/1000); for μ-law it's bytes / (sampleRate/1000).
+            // We keep the legacy μ-law math here because every existing carrier
+            // emits μ-law @ 8 kHz; adding a per-codec helper is a TODO.
+            const totalAudioMs = session.totalAudioBytes / (session.format.sampleRate / 1000);
             const rmsAvg = session.rmsCount > 0
               ? Math.round(session.rmsSum / session.rmsCount)
               : 0;
@@ -244,6 +255,7 @@ export function attachMediaStreamServer(httpServer: HttpServer): void {
               {
                 callSid: session.callSid,
                 streamSid: session.streamSid,
+                providerId: session.provider.id,
                 inboundCodec: session.format.encoding,
                 inboundSampleRate: session.format.sampleRate,
                 inboundChannels: session.format.channels,
@@ -259,16 +271,10 @@ export function attachMediaStreamServer(httpServer: HttpServer): void {
           }
           break;
         }
-
-        default:
-          // ignore unknown events
-          break;
       }
     });
 
     ws.on("close", (code, reason) => {
-      // If Twilio drops the connection without a "stop" event, still notify
-      // — but only if we haven't already (notifyStop is idempotent).
       notifyStop();
       logger.info(
         { code, reason: reason?.toString() ?? "", callSid: session?.callSid ?? null },
@@ -282,64 +288,4 @@ export function attachMediaStreamServer(httpServer: HttpServer): void {
   });
 
   logger.info({ path: MEDIA_STREAM_PATH }, "MediaStream WebSocket server attached");
-}
-
-// ── Twilio frame typing & safe parser ──────────────────────────────────────
-//
-// Narrow typed union for the JSON envelopes Twilio Media Streams sends. We
-// validate just enough at the boundary to consume them safely without `any`.
-
-interface TwilioStartFrame {
-  event: "start";
-  start?: {
-    streamSid: string;
-    callSid: string;
-    customParameters?: Record<string, string>;
-    mediaFormat?: Partial<MediaStreamFormat>;
-  };
-}
-interface TwilioMediaFrame {
-  event: "media";
-  media?: { payload?: string; timestamp?: string | number; track?: string };
-}
-interface TwilioMarkFrame {
-  event: "mark";
-  mark?: { name?: string };
-}
-interface TwilioStopFrame {
-  event: "stop";
-  stop?: { accountSid?: string; callSid?: string };
-}
-interface TwilioConnectedFrame {
-  event: "connected";
-  protocol?: string;
-  version?: string;
-}
-type TwilioFrame =
-  | TwilioConnectedFrame
-  | TwilioStartFrame
-  | TwilioMediaFrame
-  | TwilioMarkFrame
-  | TwilioStopFrame;
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
-
-const KNOWN_EVENTS = new Set(["connected", "start", "media", "mark", "stop"]);
-
-function parseTwilioFrame(raw: string): TwilioFrame | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    logger.warn({ err }, "MediaStream non-JSON frame ignored");
-    return null;
-  }
-  if (!isRecord(parsed)) return null;
-  const event = parsed["event"];
-  if (typeof event !== "string" || !KNOWN_EVENTS.has(event)) return null;
-  // Trust Twilio's envelope shape per its documented protocol; we narrow at
-  // each case site rather than over-validating here.
-  return parsed as unknown as TwilioFrame;
 }

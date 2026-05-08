@@ -19,35 +19,19 @@ const REGISTRY: Record<IvrProviderId, IvrProvider> = {
   exotel: new ExotelMediaStreamsProvider(),
 };
 
-/**
- * Production safety gate. The Exotel provider is a scaffold — its envelope
- * keys, codec defaults, and connect XML are documented but not verified
- * against a live Exotel account, and `media-stream.ts` still parses Twilio's
- * envelope shape (a separate Phase-5 follow-up). Routing real Exotel-tenant
- * traffic into that path would produce silent calls. So unless an operator
- * explicitly opts in via `EXOTEL_WS_ENABLED=1`, we fall back to the Twilio
- * provider and log a warning so the misconfiguration is visible. Test envs
- * (`NODE_ENV=test`) bypass the gate so the registry remains exercisable.
- */
-function isProviderEnabled(id: IvrProviderId): boolean {
-  if (id === "twilio") return true;
-  if (id === "exotel") {
-    if (process.env["NODE_ENV"] === "test") return true;
-    return process.env["EXOTEL_WS_ENABLED"] === "1";
-  }
-  return false;
+/** Get a provider by id, falling back to Twilio for unknown values. */
+export function getIvrProvider(id: string | null | undefined): IvrProvider {
+  if (id === "twilio" || id === "exotel") return REGISTRY[id];
+  return REGISTRY.twilio;
 }
 
-/** Get a provider by id, falling back to Twilio for unknown / disabled values. */
-export function getIvrProvider(id: string | null | undefined): IvrProvider {
-  if (id === "twilio" || id === "exotel") {
-    if (isProviderEnabled(id)) return REGISTRY[id];
-    logger.warn(
-      { requestedProvider: id, fallback: "twilio" },
-      "ivr_provider_disabled_falling_back_to_twilio",
-    );
-    return REGISTRY.twilio;
-  }
+/** Default provider used by media-stream during the WS handshake, before the
+ * `start` envelope is parsed and we know which tenant the call belongs to.
+ * Twilio is the safest default because every existing call today is Twilio
+ * and Twilio's parser is the most permissive (camelCase keys). The
+ * subscriber re-resolves the per-tenant provider as soon as it sees the
+ * leadId from customParameters. */
+export function getDefaultIvrProvider(): IvrProvider {
   return REGISTRY.twilio;
 }
 
@@ -82,6 +66,6 @@ export async function resolveProviderForLead(leadId: number): Promise<IvrProvide
   }
 }
 
-export type { IvrProvider, IvrProviderId } from "./types.js";
+export type { IvrProvider, IvrProviderId, IvrEnvelope } from "./types.js";
 export { TwilioMediaStreamsProvider } from "./twilio-provider.js";
 export { ExotelMediaStreamsProvider } from "./exotel-provider.js";

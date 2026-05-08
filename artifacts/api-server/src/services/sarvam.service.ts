@@ -6,13 +6,18 @@ import type { ConversationMessage } from "./conversation-state.js";
 const STT_URL = "https://api.sarvam.ai/speech-to-text";
 const TTS_URL = "https://api.sarvam.ai/text-to-speech";
 const CHAT_URL = "https://api.sarvam.ai/v1/chat/completions";
+// Conversation model: default to `sarvam-m` — `sarvam-30b` was tried but
+// in production it consistently consumes its 384-token budget on internal
+// reasoning and returns empty content (`empty_length_raw0`), forcing a
+// 45-60s fallback to sarvam-m anyway. Skip the wasted round-trip.
+// Original (broken) note retained below for context:
 // Conversation model: default to `sarvam-30b` — verified May 2026 to be the
 // fastest *and* cleanest option for live voice:
 //   sarvam-30b  : ~1.0s, NO <think> block, native Hinglish ✅
 //   sarvam-m    : ~2.2s, always emits <think> (must strip), eats 200-500 tokens
 //   sarvam-105b : ~50s, way too slow for live voice (still ok for analysis)
 // Override with SARVAM_CHAT_MODEL.
-const CHAT_MODEL_CONVERSATION = process.env.SARVAM_CHAT_MODEL ?? "sarvam-30b";
+const CHAT_MODEL_CONVERSATION = process.env.SARVAM_CHAT_MODEL ?? "sarvam-m";
 // Analysis runs after the call ends so latency matters less, but sarvam-30b
 // is also clean+fast for JSON, so default to it. Override via env.
 const CHAT_MODEL_ANALYSIS = process.env.SARVAM_ANALYSIS_MODEL ?? "sarvam-30b";
@@ -288,6 +293,12 @@ async function callSarvamChat(
   messages: ConversationMessage[],
   maxTokens: number,
 ): Promise<{ text: string; shouldEnd: boolean; failureReason?: string }> {
+  // Hard per-request timeout: live voice cannot tolerate a hanging fetch.
+  // Sarvam has been observed to stall 45-60s on `sarvam-30b` returning
+  // empty content. Abort fast so the caller can fall back or recover.
+  const timeoutMs = Number(process.env.SARVAM_CHAT_TIMEOUT_MS ?? 12000);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
     const response = await fetch(CHAT_URL, {
       method: "POST",
@@ -305,6 +316,7 @@ async function callSarvamChat(
         presence_penalty: 0.6,
         max_tokens: maxTokens,
       }),
+      signal: ac.signal,
     });
 
     if (!response.ok) {
@@ -343,8 +355,15 @@ async function callSarvamChat(
 
     return { text, shouldEnd };
   } catch (err) {
+    const aborted = (err as { name?: string } | null)?.name === "AbortError";
+    if (aborted) {
+      logger.warn({ model, timeoutMs }, "Sarvam chat timed out");
+      return { text: "", shouldEnd: false, failureReason: `timeout_${timeoutMs}ms` };
+    }
     logger.error({ err, model }, "Sarvam conversation response exception");
     return { text: "", shouldEnd: false, failureReason: "exception" };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

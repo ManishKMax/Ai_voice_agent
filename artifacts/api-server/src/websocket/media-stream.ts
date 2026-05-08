@@ -4,7 +4,7 @@ import { logger } from "../lib/logger.js";
 import { rmsPcm16 } from "../audio/codec.js";
 import {
   getDefaultIvrProvider,
-  getIvrProvider,
+  resolveProviderForLead,
   type IvrProvider,
 } from "../voice/ivr/index.js";
 
@@ -171,21 +171,15 @@ export function attachMediaStreamServer(httpServer: HttpServer): void {
           break;
 
         case "start": {
-          // Re-resolve provider from leadId customParameter (string match
-          // against telephony_provider on the tenant). Falls back to the
-          // current default if leadId is absent or unrecognized.
+          // Build the session immediately with the default provider so we
+          // don't drop inbound frames during the DB lookup. Then resolve
+          // the per-tenant provider from the leadId via the same
+          // `resolveProviderForLead` CallSession uses, and swap on the
+          // session in-place. Media-stream's only use of `provider` after
+          // start is the cheap RMS metric (which is wrapped in try/catch);
+          // the brief default-provider window is therefore safe.
           const leadIdRaw = env.customParameters["leadId"];
-          const tenantProviderHint = env.customParameters["provider"];
-          if (tenantProviderHint) {
-            const next = getIvrProvider(tenantProviderHint);
-            if (next.id !== provider.id) {
-              logger.info(
-                { from: provider.id, to: next.id },
-                "MediaStream provider switched via customParameter",
-              );
-              provider = next;
-            }
-          }
+          const leadIdNum = leadIdRaw ? parseInt(leadIdRaw, 10) || 0 : 0;
           session = buildSession(ws, {
             streamSid: env.streamSid,
             callSid: env.callSid,
@@ -194,6 +188,27 @@ export function attachMediaStreamServer(httpServer: HttpServer): void {
             provider,
           });
           subscriber = pickSubscriber(session.callSid, session.customParameters);
+          if (leadIdNum > 0) {
+            const sessionAtStart = session;
+            void resolveProviderForLead(leadIdNum)
+              .then((resolved) => {
+                if (sessionAtStart.stopped) return;
+                if (resolved.id !== sessionAtStart.provider.id) {
+                  logger.info(
+                    { from: sessionAtStart.provider.id, to: resolved.id, leadId: leadIdNum },
+                    "MediaStream provider swapped after DB lookup",
+                  );
+                  sessionAtStart.provider = resolved;
+                  provider = resolved;
+                }
+              })
+              .catch((err) => {
+                logger.warn(
+                  { err, leadId: leadIdNum, callSid: sessionAtStart.callSid },
+                  "MediaStream provider DB resolution failed — keeping default",
+                );
+              });
+          }
           logger.info(
             {
               callSid: session.callSid,

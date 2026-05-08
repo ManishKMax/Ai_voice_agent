@@ -86,6 +86,45 @@ export function downsample16kTo8k(input: Buffer): Buffer {
   return out;
 }
 
+/**
+ * Generic linear-interpolation resampler for PCM s16le mono.
+ * Handles any input/output rate (e.g. 22050 → 8000, 24000 → 8000, 44100 → 8000).
+ * Returns input unchanged if rates already match.
+ */
+export function resamplePcm16Mono(
+  input: Buffer,
+  fromRate: number,
+  toRate: number,
+): Buffer {
+  if (fromRate === toRate) return input;
+  const inSamples = input.length >> 1;
+  if (inSamples === 0) return Buffer.alloc(0);
+  const outSamples = Math.max(1, Math.round((inSamples * toRate) / fromRate));
+  const out = Buffer.alloc(outSamples * 2);
+  const ratio = (inSamples - 1) / Math.max(1, outSamples - 1);
+  for (let i = 0; i < outSamples; i++) {
+    const srcPos = i * ratio;
+    const idx = Math.floor(srcPos);
+    const frac = srcPos - idx;
+    const a = input.readInt16LE(idx * 2);
+    const b = idx + 1 < inSamples ? input.readInt16LE((idx + 1) * 2) : a;
+    out.writeInt16LE(((a * (1 - frac) + b * frac) | 0), i * 2);
+  }
+  return out;
+}
+
+/** Mix interleaved stereo PCM s16le to mono by averaging L+R per frame. */
+export function stereoToMonoPcm16(input: Buffer): Buffer {
+  const frames = input.length >> 2; // 2ch * 2 bytes
+  const out = Buffer.alloc(frames * 2);
+  for (let i = 0; i < frames; i++) {
+    const l = input.readInt16LE(i * 4);
+    const r = input.readInt16LE(i * 4 + 2);
+    out.writeInt16LE(((l + r) >> 1), i * 2);
+  }
+  return out;
+}
+
 /** RMS amplitude (0..32767) over a PCM s16le buffer. */
 export function rmsPcm16(buf: Buffer): number {
   const samples = buf.length >> 1;

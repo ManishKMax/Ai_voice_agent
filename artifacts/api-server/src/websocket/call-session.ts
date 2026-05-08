@@ -11,6 +11,8 @@ import {
 import {
   upsample8kTo16k,
   rmsPcm16,
+  resamplePcm16Mono,
+  stereoToMonoPcm16,
 } from "../audio/codec.js";
 import {
   getIvrProvider,
@@ -754,7 +756,34 @@ export class CallSession {
         continue;
       }
 
-      const pcm = extractWavPcm(wav) ?? wav.subarray(44);
+      const parsed = parseWav(wav);
+      let pcm = parsed?.pcm ?? wav.subarray(44);
+      const srcRate = parsed?.sampleRate ?? 8000;
+      const srcChannels = parsed?.channels ?? 1;
+      const srcBits = parsed?.bitsPerSample ?? 16;
+
+      // Defensive normalisation: Twilio Media Streams expects 8 kHz mono s16le
+      // PCM (which we then μ-law encode). Sarvam should honour
+      // target_sample_rate_hz=8000, but Bulbul has historically returned
+      // 22050/24000 in some cases — verify and resample on the fly so the
+      // user actually hears intelligible speech instead of pitched-down garble.
+      if (srcBits !== 16) {
+        logger.warn(
+          { call_id: this.session.callSid, srcBits, chunkIndex: i },
+          "call_session_tts_unexpected_bit_depth",
+        );
+      }
+      if (srcChannels === 2) pcm = stereoToMonoPcm16(pcm);
+      if (srcRate !== 8000) {
+        if (i === 0) {
+          logger.warn(
+            { call_id: this.session.callSid, srcRate, srcChannels, srcBits },
+            "call_session_tts_resampling_to_8khz",
+          );
+        }
+        pcm = resamplePcm16Mono(pcm, srcRate, 8000);
+      }
+
       const frameBytesPcm = this.provider.outboundFrameBytesPcm();
       const frameIntervalMs = this.provider.outboundFrameIntervalMs();
       const totalFrames = Math.ceil(pcm.length / frameBytesPcm);
@@ -856,28 +885,50 @@ export class CallSession {
 }
 
 /**
- * Walk a RIFF/WAVE buffer and return just the `data` chunk payload.
+ * Walk a RIFF/WAVE buffer and return the `data` payload plus the format
+ * metadata read from the `fmt ` chunk (sample rate, channels, bit depth).
  * Returns null if the buffer is not a parseable WAV — caller falls back to
- * the canonical 44-byte offset.
+ * the canonical 44-byte offset and an assumed 8 kHz mono s16le format.
  */
-function extractWavPcm(buf: Buffer): Buffer | null {
+function parseWav(
+  buf: Buffer,
+): { pcm: Buffer; sampleRate: number; channels: number; bitsPerSample: number } | null {
   if (buf.length < 12) return null;
   if (buf.toString("ascii", 0, 4) !== "RIFF") return null;
   if (buf.toString("ascii", 8, 12) !== "WAVE") return null;
+  let sampleRate = 0;
+  let channels = 0;
+  let bitsPerSample = 0;
+  let pcm: Buffer | null = null;
   let offset = 12;
   while (offset + 8 <= buf.length) {
     const id = buf.toString("ascii", offset, offset + 4);
     const size = buf.readUInt32LE(offset + 4);
     const payloadStart = offset + 8;
     const payloadEnd = payloadStart + size;
-    if (id === "data") {
-      if (payloadEnd > buf.length) return buf.subarray(payloadStart);
-      return buf.subarray(payloadStart, payloadEnd);
+    if (id === "fmt " && payloadStart + 16 <= buf.length) {
+      // WAVEFORMAT(EX): u16 audioFormat, u16 channels, u32 sampleRate,
+      //                 u32 byteRate, u16 blockAlign, u16 bitsPerSample
+      channels = buf.readUInt16LE(payloadStart + 2);
+      sampleRate = buf.readUInt32LE(payloadStart + 4);
+      bitsPerSample = buf.readUInt16LE(payloadStart + 14);
+    } else if (id === "data") {
+      pcm =
+        payloadEnd > buf.length
+          ? buf.subarray(payloadStart)
+          : buf.subarray(payloadStart, payloadEnd);
     }
+    if (pcm && sampleRate) break;
     // RIFF chunks are word-aligned; pad byte if size is odd.
     offset = payloadEnd + (size % 2);
   }
-  return null;
+  if (!pcm) return null;
+  return {
+    pcm,
+    sampleRate: sampleRate || 8000,
+    channels: channels || 1,
+    bitsPerSample: bitsPerSample || 16,
+  };
 }
 
 // ── Subscriber registration ────────────────────────────────────────────────

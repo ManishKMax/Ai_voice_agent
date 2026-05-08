@@ -111,6 +111,11 @@ export class SarvamTtsClient extends EventEmitter {
     }, OVERALL_TIMEOUT_MS);
 
     ws.on("open", () => {
+      // If cancel() fired while we were CONNECTING, do not send anything.
+      if (this.terminated) {
+        try { ws.terminate(); } catch { /* ignore */ }
+        return;
+      }
       this.emit("open");
       ws.send(JSON.stringify({
         type: "config",
@@ -123,6 +128,7 @@ export class SarvamTtsClient extends EventEmitter {
       }));
       // Sarvam needs a brief grace period before accepting the text payload.
       setTimeout(() => {
+        if (this.terminated) return;
         if (ws.readyState !== ws.OPEN) return;
         ws.send(JSON.stringify({ type: "text", data: { text: opts.text } }));
         this.armIdleTimer();
@@ -156,12 +162,29 @@ export class SarvamTtsClient extends EventEmitter {
     });
   }
 
-  /** Cancel the stream; safe to call multiple times. */
+  /**
+   * Cancel the session; safe to call multiple times and from any socket
+   * state. Marks the client terminated so a late `open` event cannot send
+   * the queued config/text payload, then forcibly tears down the underlying
+   * socket regardless of whether it is CONNECTING, OPEN, or CLOSING. Uses
+   * `terminate()` (TCP RST) instead of `close()` because the latter is a
+   * no-op while CONNECTING and would leak the socket until handshake
+   * timeout.
+   */
   cancel(): void {
-    this.clearIdleTimer();
-    if (this.ws && this.ws.readyState === this.ws.OPEN) {
-      try { this.ws.close(); } catch { /* ignore */ }
+    if (!this.terminated) {
+      this.terminated = true;
+      this.emit("error", new Error("sarvam_tts_ws_cancelled"));
     }
+    this.clearIdleTimer();
+    if (this.overallTimer) { clearTimeout(this.overallTimer); this.overallTimer = null; }
+    const ws = this.ws;
+    if (!ws) return;
+    try {
+      if (ws.readyState === ws.CONNECTING || ws.readyState === ws.OPEN) {
+        ws.terminate();
+      }
+    } catch { /* ignore */ }
   }
 
   private handleTextFrame(text: string): void {
@@ -231,14 +254,12 @@ export class SarvamTtsClient extends EventEmitter {
       requestId: this.requestId,
     };
     this.emit("done", result);
-    if (this.ws && this.ws.readyState === this.ws.OPEN) {
-      try { this.ws.close(); } catch { /* ignore */ }
-    }
+    this.tearDownSocket();
   }
 
   /**
    * Terminal: emit a single `error` event. No-op once any terminal event has
-   * been emitted. Cancels the underlying socket so no further frames arrive.
+   * been emitted. Tears down the underlying socket so no further frames arrive.
    */
   private fail(err: Error): void {
     if (this.terminated) return;
@@ -246,9 +267,18 @@ export class SarvamTtsClient extends EventEmitter {
     this.clearIdleTimer();
     if (this.overallTimer) { clearTimeout(this.overallTimer); this.overallTimer = null; }
     this.emit("error", err);
-    if (this.ws && this.ws.readyState === this.ws.OPEN) {
-      try { this.ws.close(); } catch { /* ignore */ }
-    }
+    this.tearDownSocket();
+  }
+
+  /** Forcibly destroy the socket regardless of state. Safe to call repeatedly. */
+  private tearDownSocket(): void {
+    const ws = this.ws;
+    if (!ws) return;
+    try {
+      if (ws.readyState === ws.CONNECTING || ws.readyState === ws.OPEN) {
+        ws.terminate();
+      }
+    } catch { /* ignore */ }
   }
 }
 

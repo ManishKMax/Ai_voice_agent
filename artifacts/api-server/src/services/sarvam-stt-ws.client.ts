@@ -76,6 +76,7 @@ export class SarvamSttClient extends EventEmitter {
   private ws: WebSocket | null = null;
   private startedAt = 0;
   private settled = false;
+  private cancelled = false;
   private respTimer: NodeJS.Timeout | null = null;
   private language: string = "en-IN";
 
@@ -106,6 +107,11 @@ export class SarvamSttClient extends EventEmitter {
     this.ws = ws;
 
     ws.on("open", () => {
+      // If cancel() fired while CONNECTING, do not transmit the payload.
+      if (this.cancelled) {
+        try { ws.terminate(); } catch { /* ignore */ }
+        return;
+      }
       this.emit("open");
       const payload = {
         audio: { data: wav.toString("base64"), encoding: "audio/wav", sample_rate: sampleRate },
@@ -139,10 +145,25 @@ export class SarvamSttClient extends EventEmitter {
     });
   }
 
+  /**
+   * Cancel the in-flight request; safe to call multiple times and from any
+   * socket state (CONNECTING, OPEN, CLOSING). Sets `cancelled` so that a late
+   * `open` event cannot still ship the payload, marks the client settled to
+   * suppress further terminal events, and forcibly tears down the socket via
+   * `terminate()` (TCP RST). `close()` is a no-op while CONNECTING and would
+   * leak the socket until handshake timeout, so we use `terminate()` instead.
+   */
   cancel(): void {
-    if (this.ws && this.ws.readyState === this.ws.OPEN) {
-      try { this.ws.close(); } catch { /* ignore */ }
-    }
+    this.cancelled = true;
+    this.settled = true;
+    if (this.respTimer) { clearTimeout(this.respTimer); this.respTimer = null; }
+    const ws = this.ws;
+    if (!ws) return;
+    try {
+      if (ws.readyState === ws.CONNECTING || ws.readyState === ws.OPEN) {
+        ws.terminate();
+      }
+    } catch { /* ignore */ }
   }
 
   private handleTextFrame(text: string): void {
@@ -199,8 +220,13 @@ export class SarvamSttClient extends EventEmitter {
     this.settled = true;
     if (this.respTimer) { clearTimeout(this.respTimer); this.respTimer = null; }
     this.emit("error", err);
-    if (this.ws && this.ws.readyState === this.ws.OPEN) {
-      try { this.ws.close(); } catch { /* ignore */ }
+    const ws = this.ws;
+    if (ws) {
+      try {
+        if (ws.readyState === ws.CONNECTING || ws.readyState === ws.OPEN) {
+          ws.terminate();
+        }
+      } catch { /* ignore */ }
     }
   }
 }

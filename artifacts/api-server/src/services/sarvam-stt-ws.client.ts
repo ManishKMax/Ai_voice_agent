@@ -205,12 +205,81 @@ export class SarvamSttClient extends EventEmitter {
   }
 }
 
-/** Convenience: send PCM, resolve with the final transcript text. */
-export function transcribePcm16(req: SarvamSttRequest): Promise<SttFinalEvent> {
+/**
+ * Errors that are worth retrying. We treat WS timeouts, abnormal closes and
+ * generic network failures as transient; Pydantic validation / auth errors
+ * coming back as `sarvam_stt_ws_error` are NOT retried because re-sending the
+ * same payload will fail identically.
+ */
+function isTransientSttError(err: Error): boolean {
+  const m = err.message;
+  if (m.startsWith("sarvam_stt_ws_error:")) return false;
+  if (m.includes("SARVAM_API_KEY")) return false;
+  return (
+    m.includes("timeout") ||
+    m.includes("closed_without_response") ||
+    m.includes("ECONNRESET") ||
+    m.includes("ETIMEDOUT") ||
+    m.includes("ENOTFOUND") ||
+    m.includes("EAI_AGAIN") ||
+    m.includes("socket hang up") ||
+    m.includes("network")
+  );
+}
+
+/** Single-attempt convenience — used internally by `transcribePcm16`. */
+function transcribeOnce(req: SarvamSttRequest): Promise<SttFinalEvent> {
   return new Promise((resolve, reject) => {
     const client = new SarvamSttClient();
     client.on("final", (ev) => resolve(ev));
     client.on("error", (err) => reject(err));
     client.transcribe(req);
   });
+}
+
+export interface TranscribeOptions {
+  /** Max additional retry attempts on transient errors (default 2 → 3 total). */
+  maxRetries?: number;
+  /** Initial backoff in ms; doubles each retry, capped at 4000ms. */
+  initialBackoffMs?: number;
+}
+
+/**
+ * Convenience: send PCM, resolve with the final transcript.
+ *
+ * Implements bounded exponential backoff for transient WS errors (timeouts,
+ * abnormal closes, network blips). Server-side validation errors and missing
+ * credentials are NOT retried because re-sending the same payload would fail
+ * identically. After `maxRetries` exhausted attempts, the last error is
+ * propagated wrapped with attempt count for observability.
+ */
+export async function transcribePcm16(
+  req: SarvamSttRequest,
+  opts: TranscribeOptions = {},
+): Promise<SttFinalEvent> {
+  const maxRetries = Math.max(0, opts.maxRetries ?? 2);
+  const initial = Math.max(50, opts.initialBackoffMs ?? 250);
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const out = await transcribeOnce(req);
+      if (attempt > 0) {
+        logger.info({ attempt: attempt + 1 }, "sarvam_stt_ws succeeded after retry");
+      }
+      return out;
+    } catch (err) {
+      lastErr = err as Error;
+      if (attempt === maxRetries || !isTransientSttError(lastErr)) break;
+      const backoff = Math.min(4000, initial * 2 ** attempt);
+      logger.warn(
+        { attempt: attempt + 1, maxAttempts: maxRetries + 1, backoffMs: backoff, err: lastErr.message },
+        "sarvam_stt_ws transient error — retrying",
+      );
+      await new Promise((r) => setTimeout(r, backoff));
+    }
+  }
+  const e = new Error(
+    `sarvam_stt_ws_failed_after_${maxRetries + 1}_attempts: ${lastErr?.message ?? "unknown"}`,
+  );
+  throw e;
 }

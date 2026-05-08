@@ -11,8 +11,15 @@ import { logger } from "../../lib/logger.js";
  * Sarvam's TTS WebSocket. Sarvam currently only supports MP3 over its WS
  * (probed exhaustively May 2026 — `output_audio_codec` / `audio_encoding` /
  * `output_format` are silently ignored), so the response is `audio/mpeg`,
- * not WAV. Latency stats are returned in HTTP trailers via response headers
- * sent before the body and a final `X-Tts-*` summary header set at finish.
+ * not WAV.
+ *
+ * Latency stats are surfaced two ways:
+ *   1. As HTTP trailers (`Trailer:` header advertised before the body) so
+ *      streaming-aware clients can read them after the body completes:
+ *        X-Tts-First-Byte-Ms, X-Tts-Total-Ms, X-Tts-Chunks, X-Tts-Bytes,
+ *        X-Tts-Request-Id
+ *   2. Replicated as request log fields (`tts_first_byte_ms`,
+ *      `tts_total_ms`) for server-side observability.
  */
 export async function ttsStream(req: Request, res: Response): Promise<void> {
   const body = (req.body ?? {}) as {
@@ -46,6 +53,12 @@ export async function ttsStream(req: Request, res: Response): Promise<void> {
     res.setHeader("Transfer-Encoding", "chunked");
     res.setHeader("X-Sarvam-Codec", "audio/mpeg");
     res.setHeader("Cache-Control", "no-store");
+    // Advertise the trailer fields we'll send after the body completes so that
+    // streaming-aware clients know to read them.
+    res.setHeader(
+      "Trailer",
+      "X-Tts-First-Byte-Ms, X-Tts-Total-Ms, X-Tts-Chunks, X-Tts-Bytes, X-Tts-Request-Id",
+    );
   };
 
   client.on("open", () => {
@@ -87,10 +100,22 @@ export async function ttsStream(req: Request, res: Response): Promise<void> {
       "tts_total_ms",
     );
     if (!headersSent) {
-      // Edge case: Sarvam returned no audio. Surface as 502.
-      res.status(502).json({ error: "Sarvam TTS returned no audio" });
+      // Edge case: Sarvam returned no audio. Surface as 502 with stats inline.
+      res.status(502).json({
+        error: "Sarvam TTS returned no audio",
+        stats: { firstByteMs: null, totalMs, chunks: 0, bytes: 0, requestId: result.requestId },
+      });
       return;
     }
+    // Surface latency + size as HTTP trailers — must be added before res.end()
+    // and after `Trailer:` was set in ensureHeaders().
+    res.addTrailers({
+      "X-Tts-First-Byte-Ms": String(result.firstByteMs ?? ""),
+      "X-Tts-Total-Ms": String(totalMs),
+      "X-Tts-Chunks": String(result.chunks.length),
+      "X-Tts-Bytes": String(totalBytes),
+      "X-Tts-Request-Id": result.requestId ?? "",
+    });
     res.end();
   });
 

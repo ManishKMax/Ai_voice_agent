@@ -270,5 +270,7 @@ Test lead 13: `yk` at `+919078802278` (verified Twilio trial destination)
 - Twilio signature validation is **skipped** in `NODE_ENV=development`
 - Audio files served at `/api/voice/audio/:id` expire after 10 minutes
 - Conversation sessions (in-memory) expire after 30 minutes
-- `sarvam-105b` requires `max_tokens: 2000` due to thinking mode (8-14s/turn — too slow for live voice). `sarvam-m` is the default conversation model and uses 300 tokens.
+- `sarvam-105b` requires `max_tokens: 2000` due to thinking mode (8-14s/turn — too slow for live voice). `sarvam-m` is the default conversation model and uses 2000 tokens (within the upgraded tier's 7192-token cap).
+- **Sarvam tier:** account is on the upgraded tier (verified May 2026) — `sarvam-m` cap is the model context window (7192 tokens), not the 2048 starter cap. `sarvam-30b` benchmarked 1.3-28s (too variable for live voice); used only for post-call analysis.
+- **STT WS response timeout:** 12s default (configurable via `SARVAM_STT_RESPONSE_TIMEOUT_MS`). Must exceed `VOICE_MAX_LISTEN_MS` (8s) — a tighter timeout structurally breaks STT on long utterances.
 - DB push interactive prompts: use `echo "" | pnpm --filter @workspace/db run push` or create tables directly via SQL

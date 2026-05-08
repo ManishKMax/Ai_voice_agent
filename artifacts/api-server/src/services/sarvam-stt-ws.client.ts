@@ -38,17 +38,20 @@ import { writeWavPcm16 } from "../audio/codec.js";
 
 const SARVAM_STT_WS_BASE = "wss://api.sarvam.ai/speech-to-text/ws?model=saaras:v3";
 const HANDSHAKE_TIMEOUT_MS = 4000;
-// Tight response timeout: in live voice, every second of dead air after the
-// user stops talking pushes them toward hanging up. Earlier 15s default
-// caused calls to be abandoned mid-STT (observed: lead 43, 09:12:27 hangup
-// while waiting for transcript). 6s is enough headroom for an 8s utterance
-// (matches MAX_LISTEN_MS in call-session.ts) and trips a re-prompt before
-// the user gives up. Override via SARVAM_STT_RESPONSE_TIMEOUT_MS.
-const RESPONSE_TIMEOUT_MS = (() => {
+// Response timeout for the STT WS: must comfortably exceed MAX_LISTEN_MS
+// (8s in call-session.ts) plus Sarvam's processing time on the audio.
+// Previously was 6s which is STRUCTURALLY broken — Sarvam can't return a
+// final for an 8s utterance in less than 8s of upload + processing time,
+// guaranteeing timeouts on long replies (observed: turn 2 of CA d8d4 at
+// 10:26 timed out). 12s gives ~4s of Sarvam-side headroom while still
+// re-prompting the caller before they hang up.
+// Override via SARVAM_STT_RESPONSE_TIMEOUT_MS.
+export const STT_RESPONSE_TIMEOUT_MS = (() => {
   const raw = Number(process.env.SARVAM_STT_RESPONSE_TIMEOUT_MS);
   if (Number.isFinite(raw) && raw >= 1000 && raw <= 30000) return raw;
-  return 6000;
+  return 12000;
 })();
+const RESPONSE_TIMEOUT_MS = STT_RESPONSE_TIMEOUT_MS;
 
 export interface SarvamSttRequest {
   /** Raw PCM s16le 16 kHz mono audio (no WAV header). */
@@ -129,7 +132,7 @@ export class SarvamSttClient extends EventEmitter {
       };
       ws.send(JSON.stringify(payload));
       this.respTimer = setTimeout(() => {
-        this.fail(new Error("sarvam_stt_ws_timeout: no response within 15s"));
+        this.fail(new Error(`sarvam_stt_ws_timeout: no response within ${RESPONSE_TIMEOUT_MS}ms`));
       }, RESPONSE_TIMEOUT_MS);
     });
 

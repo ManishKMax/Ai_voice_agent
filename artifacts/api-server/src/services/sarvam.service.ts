@@ -6,39 +6,32 @@ import type { ConversationMessage } from "./conversation-state.js";
 const STT_URL = "https://api.sarvam.ai/speech-to-text";
 const TTS_URL = "https://api.sarvam.ai/text-to-speech";
 const CHAT_URL = "https://api.sarvam.ai/v1/chat/completions";
-// Conversation model: default to `sarvam-m` — `sarvam-30b` was tried but
-// in production it consistently consumes its 384-token budget on internal
-// reasoning and returns empty content (`empty_length_raw0`), forcing a
-// 45-60s fallback to sarvam-m anyway. Skip the wasted round-trip.
-// Original (broken) note retained below for context:
-// Conversation model: default to `sarvam-30b` — verified May 2026 to be the
-// fastest *and* cleanest option for live voice:
-//   sarvam-30b  : ~1.0s, NO <think> block, native Hinglish ✅
-//   sarvam-m    : ~2.2s, always emits <think> (must strip), eats 200-500 tokens
-//   sarvam-105b : ~50s, way too slow for live voice (still ok for analysis)
-// Override with SARVAM_CHAT_MODEL.
+// Conversation model: `sarvam-m` is the only model fast enough for live
+// telephony. Benchmarked May 2026 on the upgraded tier (account
+// sk_b...9wLJ, context window 7192 tokens):
+//   sarvam-m    : 1.5-2.4s reliable, emits <think> block (stripped below) ✅
+//   sarvam-30b  : 1.3s best-case but extremely variable — 28s outliers and
+//                 timeouts in a 5-run benchmark. Caller hangs up. ❌
+//   sarvam-105b : 4.7s on tiny prompts, balloons with history. ❌
+// sarvam-30b is fine for post-call analysis (no caller waiting), so keep
+// it as the analysis default. Override via SARVAM_CHAT_MODEL / SARVAM_ANALYSIS_MODEL.
 const CHAT_MODEL_CONVERSATION = process.env.SARVAM_CHAT_MODEL ?? "sarvam-m";
-// Analysis runs after the call ends so latency matters less, but sarvam-30b
-// is also clean+fast for JSON, so default to it. Override via env.
 const CHAT_MODEL_ANALYSIS = process.env.SARVAM_ANALYSIS_MODEL ?? "sarvam-30b";
-// Token budgets per model — empirically tuned (May 2026):
-//   sarvam-30b : 384 is the live-voice sweet spot. Replies in this flow are
-//                1-3 sentences, so 384 ships sooner (model stops generating
-//                earlier → TTS starts earlier). 1024 was the previous default
-//                but gave the model headroom to ramble in multi-turn calls,
-//                pushing per-turn LLM latency from ~1s to 2-3s by turn 4-5.
-//                Lower than 256 silently fails on long system prompts.
-//   sarvam-m / sarvam-105b: thinking models — 1500 leaves room to think AND
-//                answer. <think> block alone eats 200-500 tokens.
-// sarvam-m always emits a <think>...</think> block before the actual reply.
-// In practice the thinking phase alone consumed ~1500 tokens on multi-turn
-// Hindi-mixed contexts (observed `empty_length_raw6472` with finish_reason
-// "length"). Bump the budget so the model has headroom to close </think>
-// AND emit a usable reply. We additionally disable thinking via
-// `chat_template_kwargs` below — but keep the larger budget as a safety net
-// for prompts where thinking remains enabled.
-const CHAT_MAX_TOKENS_CONVERSATION =
-  CHAT_MODEL_CONVERSATION === "sarvam-30b" ? 384 : 2500;
+// Token budget for live conversation. sarvam-m emits a <think>...</think>
+// block before the reply (200-1500 tokens depending on prompt complexity).
+// 2000 leaves headroom for both think + reply on multi-turn Hindi-mixed
+// contexts and stays well within the upgraded-tier 7192-token cap.
+//
+// History (do not regress):
+//  - 1500 was too tight: observed `empty_length_raw####` with finish_reason
+//    "length" on long calls (think alone consumed the budget).
+//  - 2500 broke production: starter tier capped sarvam-m at 2048, every
+//    request returned HTTP 400 → bot only said the soft filler. Even on the
+//    upgraded tier, 2000 is the empirical sweet spot — larger budgets just
+//    let the model think longer (= higher TTFA) without better replies.
+//  - sarvam-30b's 384-token budget is irrelevant here: 30b is no longer
+//    used as primary because of latency variance.
+const CHAT_MAX_TOKENS_CONVERSATION = 2000;
 // Cap how many prior turns we send to the LLM. Sarvam-30b latency grows
 // roughly linearly with prompt length, so a 10-turn call would ship ~3x
 // slower than turn 1 if we replayed everything. The system prompt is always
@@ -252,10 +245,11 @@ export async function generateConversationResponse(
     { role: "user" as const, content: userInput },
   ];
 
-  // Try the fast primary model first, then fall back to sarvam-m if it returns
-  // empty content. sarvam-30b is ~1s on short prompts but on long multi-turn
-  // contexts it sometimes burns the entire token budget producing nothing —
-  // sarvam-m is slower (~2-3s) but reliably emits content (with <think>).
+  // Single-attempt: sarvam-m is reliable and the only fast-enough model for
+  // live voice. There is no faster fallback — if sarvam-m fails, retrying a
+  // slower model (sarvam-30b 3-28s) would just push the caller past their
+  // patience window. Return a soft filler so the call stays alive and the
+  // user can repeat themselves.
   const primary = await callSarvamChat(
     CHAT_MODEL_CONVERSATION,
     fullMessages,
@@ -265,29 +259,26 @@ export async function generateConversationResponse(
     return primary;
   }
 
-  // Primary failed (empty/error). If we were already on sarvam-m there's
-  // nothing better to try — return soft filler to keep call alive.
-  if (CHAT_MODEL_CONVERSATION === "sarvam-m") {
+  // If a non-sarvam-m model was forced via env and it returned empty, try
+  // sarvam-m once as a recovery. Otherwise straight to filler.
+  if (CHAT_MODEL_CONVERSATION !== "sarvam-m") {
+    logger.warn(
+      { primaryReason: primary.failureReason, primaryModel: CHAT_MODEL_CONVERSATION },
+      "Primary chat empty — falling back to sarvam-m",
+    );
+    const fallback = await callSarvamChat("sarvam-m", fullMessages, CHAT_MAX_TOKENS_CONVERSATION);
+    if (fallback.text) return fallback;
+    logger.warn(
+      { fallbackReason: fallback.failureReason },
+      "sarvam-m fallback also empty — soft retry filler",
+    );
+  } else {
     logger.warn(
       { primaryReason: primary.failureReason },
-      "Primary chat returned empty — no fallback available, soft retry filler",
+      "sarvam-m returned empty — soft retry filler",
     );
-    return { text: "Sorry, ek second — kya aap dohra sakte hain?", shouldEnd: false };
   }
 
-  logger.warn(
-    { primaryReason: primary.failureReason },
-    "Primary chat (sarvam-30b) empty — falling back to sarvam-m",
-  );
-  const fallback = await callSarvamChat("sarvam-m", fullMessages, 1500);
-  if (fallback.text) {
-    return fallback;
-  }
-
-  logger.warn(
-    { fallbackReason: fallback.failureReason },
-    "Both primary and fallback chat returned empty — soft retry filler",
-  );
   return { text: "Sorry, ek second — kya aap dohra sakte hain?", shouldEnd: false };
 }
 
@@ -303,7 +294,13 @@ async function callSarvamChat(
   // Hard per-request timeout: live voice cannot tolerate a hanging fetch.
   // Sarvam has been observed to stall 45-60s on `sarvam-30b` returning
   // empty content. Abort fast so the caller can fall back or recover.
-  const timeoutMs = Number(process.env.SARVAM_CHAT_TIMEOUT_MS ?? 12000);
+  // Validated env override (1s-60s) so a malformed value like "abc" can't
+  // collapse to NaN → AbortController firing immediately on every chat call.
+  const timeoutMs = (() => {
+    const raw = Number(process.env.SARVAM_CHAT_TIMEOUT_MS);
+    if (Number.isFinite(raw) && raw >= 1000 && raw <= 60000) return raw;
+    return 12000;
+  })();
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {

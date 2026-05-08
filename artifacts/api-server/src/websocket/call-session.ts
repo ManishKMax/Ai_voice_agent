@@ -25,7 +25,7 @@ import {
   analyzeTranscript,
   splitForTTS,
 } from "../services/sarvam.service.js";
-import { SarvamSttClient } from "../services/sarvam-stt-ws.client.js";
+import { SarvamSttClient, STT_RESPONSE_TIMEOUT_MS } from "../services/sarvam-stt-ws.client.js";
 import {
   agentConfig,
   buildGreetingText,
@@ -574,7 +574,13 @@ export class CallSession {
     // until the user hung up), this guarantees the state machine never
     // wedges silently. Set 1s above the client's own response timeout so
     // the client gets the chance to surface a typed error first.
-    const STT_HARD_DEADLINE_MS = 7000;
+    //
+    // CRITICAL: must be DERIVED from STT_RESPONSE_TIMEOUT_MS, not a fixed
+    // constant. A previous hardcoded 7000ms (below the 12000ms client
+    // timeout) defeated the client timeout entirely on long utterances —
+    // the watchdog would fire first and abort STT before the client got a
+    // chance to return a final on an 8-second utterance.
+    const STT_HARD_DEADLINE_MS = STT_RESPONSE_TIMEOUT_MS + 1000;
     let watchdog: NodeJS.Timeout | null = null;
     try {
       const final = await new Promise<{ text: string }>((resolve, reject) => {

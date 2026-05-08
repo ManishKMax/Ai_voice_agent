@@ -176,18 +176,8 @@ class CallSession {
         pipeline: "ws",
       });
 
-      logger.info(
-        {
-          call_id: this.session.callSid,
-          leadId: this.leadId,
-          leadName: this.leadName,
-          state_from: "IDLE",
-          state_to: "BOT_SPEAKING",
-          ts: Math.round(performance.now()),
-        },
-        "call_session_state_transition",
-      );
-
+      // Note: speakAndAdvance() emits the IDLE→BOT_SPEAKING transition log
+      // via this.transition(), so we don't duplicate it here.
       await this.speakAndAdvance(greetingText, /*isOpening*/ true);
     } catch (err) {
       logger.error({ err, callSid: this.session.callSid }, "call_session_start_failed");

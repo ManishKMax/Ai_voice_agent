@@ -37,13 +37,20 @@ interface CaptureSummary {
   completedAt: number | null;
   status: "in_progress" | "complete" | "failed";
   error?: string;
-  /** Populated when the request set ?transcribe=true. */
+  /**
+   * Populated when the request set ?transcribe=true. The Sarvam STT WS
+   * endpoint is single-shot request/response (final-only); partial
+   * transcripts are NOT supported by the public API as of May 2026, so
+   * `partials` is always an empty array. The field is retained on the
+   * contract so Phase 3 can light it up transparently when/if Sarvam
+   * ships streaming STT, without breaking existing clients.
+   */
   transcription?: {
     text: string;
     language: string | null;
     requestId: string | null;
     latencyMs: number;
-    /** Future-proof: array of partials if/when Sarvam ships streaming STT. */
+    /** Always [] today; will populate when Sarvam ships streaming STT. */
     partials: { text: string; timestampMs: number }[];
     error?: string;
   };

@@ -58,7 +58,7 @@ export async function ttsStream(req: Request, res: Response): Promise<void> {
     // streaming-aware clients know to read them.
     res.setHeader(
       "Trailer",
-      "X-Tts-First-Byte-Ms, X-Tts-Total-Ms, X-Tts-Chunks, X-Tts-Bytes, X-Tts-Request-Id",
+      "X-Tts-First-Byte-Ms, X-Tts-Total-Ms, X-Tts-Chunks, X-Tts-Bytes, X-Tts-Request-Id, X-Tts-Error",
     );
   };
 

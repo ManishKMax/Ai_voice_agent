@@ -1,0 +1,109 @@
+I am building a live IVR voice-agent app using Sarvam AI STT WebSocket + TTS WebSocket.
+Current issue:
+The call connects, TTS speaks, but after caller speaks the agent often says “I could not hear you.” This is likely not an LLM issue. I have not added LLM yet. The problem is probably audio input handling, STT streaming, VAD/endpointing, codec, sample rate, silence timeout, or flush timing.
+Please inspect the full codebase and implement a production-grade audio pipeline fix.
+Goals:
+Verify IVR inbound audio format
+Detect actual codec, sample rate, bit depth, channel count.
+Log whether audio is μ-law, A-law, PCM, WAV, or other.
+Confirm if IVR audio is 8kHz telephony audio.
+Normalize audio before sending to Sarvam STT
+Convert all inbound caller audio to mono PCM signed 16-bit little endian.
+Prefer 16kHz sample rate for Sarvam STT.
+If IVR gives 8kHz μ-law/A-law, decode it properly and resample to 16kHz PCM.
+Do not falsely label μ-law/A-law audio as PCM.
+Fix STT WebSocket streaming
+Send small continuous audio chunks.
+Ensure chunks are non-empty.
+Ensure correct Sarvam STT WebSocket config:
+model: saaras:v3
+language-code: unknown
+encoding: pcm_s16le
+sample_rate: 16000
+Add reconnect/error handling.
+Log every STT partial and final transcript.
+Add audio health gate
+Before sending/processing audio, calculate and log:
+chunk_count
+total_audio_ms
+rms_min
+rms_avg
+rms_max
+peak volume
+silence duration
+speech_detected true/false
+Do not trigger “I could not hear you” unless:
+bot has finished speaking
+at least 5–7 seconds of listening passed
+no partial transcript was received
+RMS stayed below speech threshold
+no valid audio chunks were received
+Fix turn-taking state machine
+Implement this call flow:
+BOT_SPEAKING
+→ WAIT_AFTER_BOT_SPEECH for 300–500ms
+→ LISTENING
+→ USER_SPEECH_DETECTED
+→ USER_SILENCE_DETECTED for 1.2–1.8s
+→ FLUSH_STT
+→ WAIT_FOR_FINAL_TRANSCRIPT
+→ PROCESS_TRANSCRIPT
+→ BOT_SPEAKING
+Important:
+Do not flush STT while user is still speaking.
+Do not listen to bot’s own TTS playback as caller input.
+Pause or ignore inbound audio frames during BOT_SPEAKING unless barge-in is intentionally supported.
+If barge-in is supported, add clear separation and logging.
+Add debug logs per call turn
+For every turn, log:
+call_id
+turn_id
+state
+bot_speaking_start
+bot_speaking_end
+listening_start
+audio_sample_rate
+audio_encoding
+chunk_count_sent_to_stt
+total_audio_ms_sent_to_stt
+rms_min
+rms_avg
+rms_max
+stt_partial_received
+stt_final_received
+final_transcript
+flush_time
+silence_timeout_reason
+sarvam_ws_errors
+Add test mode
+Create a test/debug route or script that:
+records 10 seconds of caller audio
+saves raw inbound audio
+saves normalized PCM/WAV audio
+prints actual audio format
+prints RMS stats
+optionally sends the saved normalized file/stream to Sarvam STT to verify transcription
+Keep existing app behavior
+Do not rewrite unrelated business logic.
+Do not change UI unless needed for debug logs.
+Add clean comments.
+Make changes safely and incrementally.
+After changes, provide a summary of modified files and exact test steps.
+Expected outcome:
+The app should stop falsely saying “I could not hear you” when caller audio exists. We should be able to prove from logs whether Sarvam received valid speech audio or whether the IVR provider is not sending proper audio.
+ 
+ 
+ 
+Acceptance test:
+Make a live IVR call.
+Let bot speak first.
+Caller says: “Hello, can you hear me?”
+System must log:
+inbound audio received
+normalized audio generated
+RMS above speech threshold
+STT partial transcript received
+STT final transcript received
+Agent must not say “I could not hear you” if RMS/audio exists.
+If no transcript comes despite valid RMS/audio, save the audio file for Sarvam debugging.
+If RMS is zero or near zero, mark issue as IVR/provider audio routing problem.

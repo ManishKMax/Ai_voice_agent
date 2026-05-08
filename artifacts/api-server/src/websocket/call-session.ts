@@ -594,8 +594,11 @@ class CallSession {
       );
       return;
     }
-    // Strip 44-byte RIFF/WAVE header → raw PCM s16le 8 kHz mono.
-    const pcm = wav.subarray(44);
+    // Locate the PCM payload via a chunk-aware RIFF/WAVE walk rather than a
+    // fixed 44-byte offset — Sarvam currently returns canonical WAV but a
+    // future change adding a `LIST`/`INFO`/`fact` chunk before `data` would
+    // silently corrupt every TTS playback if we hardcoded the offset.
+    const pcm = extractWavPcm(wav) ?? wav.subarray(44);
     const mulaw = pcm16ToMuLaw(pcm);
 
     // Send 20 ms frames paced at real-time. We keep a tiny lead buffer (3
@@ -681,6 +684,31 @@ class CallSession {
       );
     }
   }
+}
+
+/**
+ * Walk a RIFF/WAVE buffer and return just the `data` chunk payload.
+ * Returns null if the buffer is not a parseable WAV — caller falls back to
+ * the canonical 44-byte offset.
+ */
+function extractWavPcm(buf: Buffer): Buffer | null {
+  if (buf.length < 12) return null;
+  if (buf.toString("ascii", 0, 4) !== "RIFF") return null;
+  if (buf.toString("ascii", 8, 12) !== "WAVE") return null;
+  let offset = 12;
+  while (offset + 8 <= buf.length) {
+    const id = buf.toString("ascii", offset, offset + 4);
+    const size = buf.readUInt32LE(offset + 4);
+    const payloadStart = offset + 8;
+    const payloadEnd = payloadStart + size;
+    if (id === "data") {
+      if (payloadEnd > buf.length) return buf.subarray(payloadStart);
+      return buf.subarray(payloadStart, payloadEnd);
+    }
+    // RIFF chunks are word-aligned; pad byte if size is odd.
+    offset = payloadEnd + (size % 2);
+  }
+  return null;
 }
 
 // ── Subscriber registration ────────────────────────────────────────────────

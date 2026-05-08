@@ -326,8 +326,40 @@ class CallSession {
       !validAudio;
 
     if (!allConditionsMet) {
-      // We DID get audio but no clear speech onset (e.g. background noise).
-      // Wait the rest of MAX_LISTEN_MS in case the user is still gathering.
+      // We DID get audio but no clear speech onset (e.g. background noise on
+      // the line). Give the caller the rest of the MAX_LISTEN_MS window in
+      // case they're still gathering thoughts — but enforce a hard cap so a
+      // perpetually noisy line can't keep the call stuck in LISTENING forever.
+      if (elapsedMs >= MAX_LISTEN_MS) {
+        logger.warn(
+          {
+            call_id: this.session.callSid,
+            turn_id: this.turnId,
+            listening_ms: Math.round(elapsedMs),
+            rms_max: Math.round(rmsMax),
+            silence_timeout_reason: "noise_only_max_listen",
+          },
+          "call_session_listen_max_window_noise",
+        );
+        this.rePromptCount++;
+        if (this.rePromptCount > 1) {
+          await this.speakAndEnd(
+            agentConfig.language === "hi-IN" || agentConfig.language === "en-IN"
+              ? "Line par awaaz nahi aa rahi. Baad mein call karte hain. Dhanyavaad!"
+              : "I can't quite make out what you're saying. I'll call you back. Goodbye!",
+            "noise_only_exhausted",
+          );
+          return;
+        }
+        const rePrompt =
+          agentConfig.language === "hi-IN" || agentConfig.language === "en-IN"
+            ? "Sorry, line par awaaz saaf nahi aa rahi. Kya aap dohra sakte hain?"
+            : "Sorry, the line is a bit unclear — could you repeat that?";
+        // Reset turn buffers so the re-prompt's listening window starts fresh.
+        this.resetTurnBuffers();
+        await this.speakAndAdvance(rePrompt, /*isOpening*/ false, /*countAsTurn*/ false);
+        return;
+      }
       const remaining = Math.max(2000, MAX_LISTEN_MS - elapsedMs);
       this.listenWatchdog = setTimeout(
         () => void this.handleListenWatchdog(),

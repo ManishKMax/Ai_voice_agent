@@ -19,7 +19,7 @@ import {
   generateConversationResponse,
   analyzeTranscript,
 } from "../services/sarvam.service.js";
-import { transcribePcm16 } from "../services/sarvam-stt-ws.client.js";
+import { SarvamSttClient } from "../services/sarvam-stt-ws.client.js";
 import {
   agentConfig,
   buildGreetingText,
@@ -68,16 +68,29 @@ type State =
   | "PROCESS_TRANSCRIPT"
   | "ENDED";
 
-const FRAME_BYTES = 160;             // 20 ms @ 8 kHz μ-law
+const FRAME_BYTES = 160;             // 20 ms @ 8 kHz μ-law (Twilio frame size)
 const FRAME_INTERVAL_MS = 20;
-const POST_BOT_GRACE_MS = 400;       // WAIT_AFTER_BOT_SPEECH
-const SILENCE_END_MS = 1500;         // USER_SILENCE_DETECTED window
-const SPEECH_RMS_THRESHOLD = 600;    // RMS over 8 kHz PCM s16le ~ silence floor
-const SILENCE_RMS_THRESHOLD = 350;   // hysteresis: must drop below this to count as silence
-const HEALTH_GATE_AFTER_MS = 6000;   // re-prompt eligibility window
-const MIN_SPEECH_MS = 300;           // ignore sub-300ms blips as noise
-const MAX_LISTEN_MS = 12000;         // hard ceiling on a single LISTENING window
 const MAX_TURNS_DEFAULT = 6;
+
+/**
+ * VAD / endpointing thresholds. All overridable via env so operators can tune
+ * for noisy lines, soft speakers, or aggressive endpointing without a deploy.
+ * Defaults reflect what worked best in dev testing for Indian phone lines.
+ */
+function envInt(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = parseInt(raw, 10);
+  if (Number.isNaN(n) || n < min || n > max) return fallback;
+  return n;
+}
+const POST_BOT_GRACE_MS      = envInt("VOICE_POST_BOT_GRACE_MS",      400,    0, 5000);
+const SILENCE_END_MS         = envInt("VOICE_SILENCE_END_MS",         1500, 200, 5000);
+const SPEECH_RMS_THRESHOLD   = envInt("VOICE_SPEECH_RMS_THRESHOLD",    600,   1, 32767);
+const SILENCE_RMS_THRESHOLD  = envInt("VOICE_SILENCE_RMS_THRESHOLD",   350,   1, 32767);
+const HEALTH_GATE_AFTER_MS   = envInt("VOICE_HEALTH_GATE_AFTER_MS",   6000, 1000, 60000);
+const MIN_SPEECH_MS          = envInt("VOICE_MIN_SPEECH_MS",           300,   0, 5000);
+const MAX_LISTEN_MS          = envInt("VOICE_MAX_LISTEN_MS",         12000, 2000, 60000);
 
 interface PerTurnLog {
   call_id: string;
@@ -129,6 +142,8 @@ class CallSession {
   private healthGateFired = false;
   private rePromptCount = 0;
   private finalised = false;
+  /** Active in-flight STT client, so onStop() can abort it cleanly. */
+  private sttInFlight: SarvamSttClient | null = null;
 
   constructor(session: MediaStreamSession) {
     this.session = session;
@@ -217,6 +232,13 @@ class CallSession {
     this.cancelled = true;
     this.clearTimers();
     this.ttsStopRequested = true;
+    // Abort any in-flight Sarvam STT request so its socket doesn't linger
+    // until handshake/response timeout. cancel() is idempotent and safe
+    // from any WS readyState.
+    if (this.sttInFlight) {
+      try { this.sttInFlight.cancel(); } catch { /* ignore */ }
+      this.sttInFlight = null;
+    }
     logger.info(
       { call_id: this.session.callSid, finalState: this.state },
       "call_session_stopped",
@@ -374,17 +396,32 @@ class CallSession {
     let transcript = "";
     let sttErr: string | null = null;
     let finalReceived = false;
+    // Use the lower-level SarvamSttClient directly (instead of the retrying
+    // transcribePcm16 helper) so onStop() can abort the in-flight socket via
+    // sttInFlight.cancel(). Phase 3 prefers fast termination on hangup over
+    // best-effort retries — a hung-up call doesn't need a transcript.
+    const sttClient = new SarvamSttClient();
+    this.sttInFlight = sttClient;
     try {
-      const final = await transcribePcm16({
-        pcm16,
-        sampleRate: 16000,
-        language: agentConfig.language,
+      const final = await new Promise<{ text: string }>((resolve, reject) => {
+        sttClient.on("final", (ev) => resolve({ text: ev.text }));
+        sttClient.on("error", (err) => reject(err));
+        sttClient.transcribe({
+          pcm16,
+          sampleRate: 16000,
+          language: agentConfig.language,
+        });
       });
       transcript = (final.text ?? "").trim();
       finalReceived = true;
     } catch (err) {
       sttErr = (err as Error).message;
+    } finally {
+      // Clear the handle so onStop() doesn't double-cancel a settled client.
+      if (this.sttInFlight === sttClient) this.sttInFlight = null;
     }
+    // If onStop() fired during the await, drop the result and exit cleanly.
+    if (this.cancelled) return;
 
     const flushMs = Math.round(performance.now() - this.flushStartMs);
 

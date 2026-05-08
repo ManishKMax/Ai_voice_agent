@@ -93,7 +93,12 @@ const SPEECH_RMS_THRESHOLD   = envInt("VOICE_SPEECH_RMS_THRESHOLD",    600,   1,
 const SILENCE_RMS_THRESHOLD  = envInt("VOICE_SILENCE_RMS_THRESHOLD",   350,   1, 32767);
 const HEALTH_GATE_AFTER_MS   = envInt("VOICE_HEALTH_GATE_AFTER_MS",   6000, 1000, 60000);
 const MIN_SPEECH_MS          = envInt("VOICE_MIN_SPEECH_MS",           300,   0, 5000);
-const MAX_LISTEN_MS          = envInt("VOICE_MAX_LISTEN_MS",         12000, 2000, 60000);
+// Cap a single user utterance at 8s. Longer utterances make Sarvam STT
+// slower (it processes the whole buffer at once and is request/response,
+// not streaming) — observed dead-air hangs when the user spoke for 11s
+// and STT couldn't return before they hung up. 8s keeps the per-turn STT
+// round-trip under the new 6s response timeout.
+const MAX_LISTEN_MS          = envInt("VOICE_MAX_LISTEN_MS",          8000, 2000, 60000);
 // Barge-in: minimum sustained speech duration (ms) during BOT_SPEAKING that
 // counts as the user interrupting. Set <=0 to disable barge-in.
 const BARGE_IN_MIN_MS        = envInt("VOICE_BARGE_IN_MIN_MS",         200,   0, 5000);
@@ -540,6 +545,14 @@ export class CallSession {
     // best-effort retries — a hung-up call doesn't need a transcript.
     const sttClient = new SarvamSttClient();
     this.sttInFlight = sttClient;
+    // Defence-in-depth watchdog: even if the STT client somehow fails to
+    // emit a terminal event (a real-world hang we observed: lead 43, the
+    // FLUSH_STT → WAIT_FOR_FINAL_TRANSCRIPT state sat for 10s with no log
+    // until the user hung up), this guarantees the state machine never
+    // wedges silently. Set 1s above the client's own response timeout so
+    // the client gets the chance to surface a typed error first.
+    const STT_HARD_DEADLINE_MS = 7000;
+    let watchdog: NodeJS.Timeout | null = null;
     try {
       const final = await new Promise<{ text: string }>((resolve, reject) => {
         // Expose reject so onStop() can settle this promise immediately when
@@ -547,6 +560,14 @@ export class CallSession {
         this.sttRejectInFlight = reject;
         sttClient.on("final", (ev) => resolve({ text: ev.text }));
         sttClient.on("error", (err) => reject(err));
+        watchdog = setTimeout(() => {
+          logger.warn(
+            { call_id: this.session.callSid, deadline_ms: STT_HARD_DEADLINE_MS },
+            "call_session_stt_watchdog_fired",
+          );
+          try { sttClient.cancel(); } catch { /* ignore */ }
+          reject(new Error("stt_watchdog_timeout"));
+        }, STT_HARD_DEADLINE_MS);
         sttClient.transcribe({
           pcm16,
           sampleRate: 16000,
@@ -558,6 +579,7 @@ export class CallSession {
     } catch (err) {
       sttErr = (err as Error).message;
     } finally {
+      if (watchdog) { clearTimeout(watchdog); watchdog = null; }
       // Clear handles so onStop() doesn't double-cancel a settled client and
       // doesn't try to reject a promise that already resolved.
       if (this.sttInFlight === sttClient) this.sttInFlight = null;

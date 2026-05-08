@@ -87,7 +87,11 @@ interface SttClientEvents {
 
 export class SarvamSttClient extends EventEmitter {
   private ws: WebSocket | null = null;
+  private wsOpened = false;
+  private wsOpenedAt = 0;
   private startedAt = 0;
+  private payloadSentAt = 0;
+  private pendingRequest: SarvamSttRequest | null = null;
   private settled = false;
   private cancelled = false;
   private respTimer: NodeJS.Timeout | null = null;
@@ -100,40 +104,89 @@ export class SarvamSttClient extends EventEmitter {
     return super.emit(event, ...args);
   }
 
+  /**
+   * Pre-warm the WS connection without sending audio. Lets `CallSession` open
+   * a socket during BOT_SPEAKING so the handshake cost (~300-800ms in
+   * practice, but observed up to 12s on cold turn-1 cases) is paid before the
+   * user finishes their reply rather than after. Resolves once the server's
+   * `open` event fires; rejects on handshake error.
+   *
+   * The response timer is NOT started here — it only starts when `transcribe`
+   * actually sends the payload. Idle warm sockets that the server closes are
+   * surfaced via `wsOpened=false` so the next `transcribe()` falls back to a
+   * cold open.
+   */
+  async prewarm(language?: string): Promise<void> {
+    if (this.ws) return;
+    if (!config.sarvam.apiKey) throw new Error("SARVAM_API_KEY not set");
+    if (language) this.language = language;
+    await new Promise<void>((resolve, reject) => {
+      this.openSocket((err) => err ? reject(err) : resolve());
+    });
+  }
+
+  /**
+   * True when the WS handshake has completed, the socket is still OPEN, and
+   * less than `maxIdleMs` have passed since open. Callers should fall back to
+   * a cold open if this returns false.
+   */
+  isWarm(maxIdleMs = 30000): boolean {
+    return (
+      this.wsOpened &&
+      !!this.ws &&
+      this.ws.readyState === WebSocket.OPEN &&
+      Date.now() - this.wsOpenedAt < maxIdleMs
+    );
+  }
+
   /** Send a complete utterance for transcription. Resolves via `final` event. */
   transcribe(req: SarvamSttRequest): void {
-    if (this.ws) throw new Error("SarvamSttClient already in flight");
+    if (this.payloadSentAt) throw new Error("SarvamSttClient already in flight");
     if (!config.sarvam.apiKey) {
       queueMicrotask(() => this.emit("error", new Error("SARVAM_API_KEY not set")));
       return;
     }
-    const sampleRate = req.sampleRate ?? 16000;
-    this.language = req.language ?? "en-IN";
-    const wav = writeWavPcm16(req.pcm16, sampleRate);
-    const url = `${SARVAM_STT_WS_BASE}&language-code=${encodeURIComponent(this.language)}`;
-
+    if (req.language) this.language = req.language;
+    this.pendingRequest = req;
     this.startedAt = Date.now();
+
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.sendPayload();
+      return;
+    }
+    if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+      // prewarm in progress — sendPayload will fire on open
+      return;
+    }
+    // Cold path: open the socket and let the open handler send.
+    this.openSocket();
+  }
+
+  private openSocket(onHandshake?: (err: Error | null) => void): void {
+    const url = `${SARVAM_STT_WS_BASE}&language-code=${encodeURIComponent(this.language)}`;
     const ws = new WebSocket(url, {
-      headers: { "api-subscription-key": config.sarvam.apiKey },
+      headers: { "api-subscription-key": config.sarvam.apiKey! },
       handshakeTimeout: HANDSHAKE_TIMEOUT_MS,
     });
     this.ws = ws;
+    let handshakeSettled = false;
+    const settleHandshake = (err: Error | null): void => {
+      if (handshakeSettled) return;
+      handshakeSettled = true;
+      onHandshake?.(err);
+    };
 
     ws.on("open", () => {
-      // If cancel() fired while CONNECTING, do not transmit the payload.
       if (this.cancelled) {
         try { ws.terminate(); } catch { /* ignore */ }
+        settleHandshake(new Error("cancelled"));
         return;
       }
+      this.wsOpened = true;
+      this.wsOpenedAt = Date.now();
       this.emit("open");
-      const payload = {
-        audio: { data: wav.toString("base64"), encoding: "audio/wav", sample_rate: sampleRate },
-        language_code: this.language,
-      };
-      ws.send(JSON.stringify(payload));
-      this.respTimer = setTimeout(() => {
-        this.fail(new Error(`sarvam_stt_ws_timeout: no response within ${RESPONSE_TIMEOUT_MS}ms`));
-      }, RESPONSE_TIMEOUT_MS);
+      settleHandshake(null);
+      if (this.pendingRequest) this.sendPayload();
     });
 
     ws.on("message", (raw, isBinary) => {
@@ -143,6 +196,7 @@ export class SarvamSttClient extends EventEmitter {
 
     ws.on("error", (err) => {
       logger.warn({ err: err.message }, "sarvam_stt_ws error");
+      settleHandshake(err);
       this.fail(err);
     });
 
@@ -150,12 +204,41 @@ export class SarvamSttClient extends EventEmitter {
       if (this.respTimer) { clearTimeout(this.respTimer); this.respTimer = null; }
       const reasonStr = reason?.toString() ?? "";
       this.emit("close", code, reasonStr);
+      // Idle close on a warm socket (no payload sent yet) is not an error —
+      // mark the client unusable so the next transcribe() falls back to cold.
+      if (!this.payloadSentAt && !this.pendingRequest) {
+        this.wsOpened = false;
+        this.ws = null;
+        settleHandshake(new Error(`sarvam_stt_ws_idle_close code=${code}`));
+        return;
+      }
       // If the server closed without sending us anything, surface a generic error
       // so the caller's promise doesn't hang.
       if (!this.settled) {
         this.fail(new Error(`sarvam_stt_ws_closed_without_response code=${code}`));
       }
     });
+  }
+
+  private sendPayload(): void {
+    if (this.cancelled || !this.pendingRequest || !this.ws) return;
+    const req = this.pendingRequest;
+    const sampleRate = req.sampleRate ?? 16000;
+    const wav = writeWavPcm16(req.pcm16, sampleRate);
+    const payload = {
+      audio: { data: wav.toString("base64"), encoding: "audio/wav", sample_rate: sampleRate },
+      language_code: this.language,
+    };
+    try {
+      this.ws.send(JSON.stringify(payload));
+    } catch (err) {
+      this.fail(err as Error);
+      return;
+    }
+    this.payloadSentAt = Date.now();
+    this.respTimer = setTimeout(() => {
+      this.fail(new Error(`sarvam_stt_ws_timeout: no response within ${RESPONSE_TIMEOUT_MS}ms`));
+    }, RESPONSE_TIMEOUT_MS);
   }
 
   /**

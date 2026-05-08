@@ -191,6 +191,16 @@ export class CallSession {
   private sttInFlight: SarvamSttClient | null = null;
   /** Reject handle for the active STT promise so cancel settles the await. */
   private sttRejectInFlight: ((err: Error) => void) | null = null;
+  /**
+   * Pre-warmed Sarvam STT WS. Opened during BOT_SPEAKING so the handshake
+   * (~300ms typical, up to 12s on cold turn-1) is paid before the user
+   * finishes their reply. Consumed at flushAndProcess time; recreated for
+   * the next turn. Idle warm sockets that the server closes mid-bot-speech
+   * are detected via `isWarm()` and replaced with a cold open.
+   */
+  private warmStt: SarvamSttClient | null = null;
+  /** Once-per-call flag for the TTS resampling notice (was per-turn WARN). */
+  private ttsResamplingNoticeLogged = false;
 
   constructor(session: MediaStreamSession) {
     this.session = session;
@@ -315,6 +325,12 @@ export class CallSession {
     if (this.sttInFlight) {
       try { this.sttInFlight.cancel(); } catch { /* ignore */ }
       this.sttInFlight = null;
+    }
+    // Same for any pre-warmed STT socket that hasn't been consumed yet —
+    // failure to terminate would leak the WS until handshake/idle timeout.
+    if (this.warmStt) {
+      try { this.warmStt.cancel(); } catch { /* ignore */ }
+      this.warmStt = null;
     }
     // Settle the pending await deterministically — cancel() may not fire
     // `final` or `error` after marking the client closed, which would leave
@@ -562,12 +578,8 @@ export class CallSession {
     let transcript = "";
     let sttErr: string | null = null;
     let finalReceived = false;
-    // Use the lower-level SarvamSttClient directly (instead of the retrying
-    // transcribePcm16 helper) so onStop() can abort the in-flight socket via
-    // sttInFlight.cancel(). Phase 3 prefers fast termination on hangup over
-    // best-effort retries — a hung-up call doesn't need a transcript.
-    const sttClient = new SarvamSttClient();
-    this.sttInFlight = sttClient;
+    let sttAttempts = 0;
+    let sttUsedWarmSocket = false;
     // Defence-in-depth watchdog: even if the STT client somehow fails to
     // emit a terminal event (a real-world hang we observed: lead 43, the
     // FLUSH_STT → WAIT_FOR_FINAL_TRANSCRIPT state sat for 10s with no log
@@ -581,38 +593,94 @@ export class CallSession {
     // the watchdog would fire first and abort STT before the client got a
     // chance to return a final on an 8-second utterance.
     const STT_HARD_DEADLINE_MS = STT_RESPONSE_TIMEOUT_MS + 1000;
-    let watchdog: NodeJS.Timeout | null = null;
-    try {
-      const final = await new Promise<{ text: string }>((resolve, reject) => {
-        // Expose reject so onStop() can settle this promise immediately when
-        // cancel() doesn't trigger a `final`/`error` event from the client.
-        this.sttRejectInFlight = reject;
-        sttClient.on("final", (ev) => resolve({ text: ev.text }));
-        sttClient.on("error", (err) => reject(err));
-        watchdog = setTimeout(() => {
-          logger.warn(
-            { call_id: this.session.callSid, deadline_ms: STT_HARD_DEADLINE_MS },
-            "call_session_stt_watchdog_fired",
-          );
-          try { sttClient.cancel(); } catch { /* ignore */ }
-          reject(new Error("stt_watchdog_timeout"));
-        }, STT_HARD_DEADLINE_MS);
-        sttClient.transcribe({
-          pcm16,
-          sampleRate: 16000,
-          language: agentConfig.language,
+
+    // One STT attempt. Uses the warm socket on attempt 0 if available.
+    // Returns the transcript (which may be empty if Sarvam returned no text)
+    // or throws on transient/terminal error.
+    const runSttOnce = async (deadlineMs: number = STT_HARD_DEADLINE_MS): Promise<string> => {
+      sttAttempts++;
+      let sttClient: SarvamSttClient;
+      if (this.warmStt && this.warmStt.isWarm()) {
+        sttClient = this.warmStt;
+        this.warmStt = null;
+        sttUsedWarmSocket = true;
+      } else {
+        if (this.warmStt) {
+          // Stale warm socket — terminate it so it doesn't leak.
+          try { this.warmStt.cancel(); } catch { /* ignore */ }
+          this.warmStt = null;
+        }
+        sttClient = new SarvamSttClient();
+        sttUsedWarmSocket = false;
+      }
+      this.sttInFlight = sttClient;
+      let watchdog: NodeJS.Timeout | null = null;
+      try {
+        const final = await new Promise<{ text: string }>((resolve, reject) => {
+          // Expose reject so onStop() can settle this promise immediately when
+          // cancel() doesn't trigger a `final`/`error` event from the client.
+          this.sttRejectInFlight = reject;
+          sttClient.on("final", (ev) => resolve({ text: ev.text }));
+          sttClient.on("error", (err) => reject(err));
+          watchdog = setTimeout(() => {
+            logger.warn(
+              { call_id: this.session.callSid, deadline_ms: deadlineMs },
+              "call_session_stt_watchdog_fired",
+            );
+            try { sttClient.cancel(); } catch { /* ignore */ }
+            reject(new Error("stt_watchdog_timeout"));
+          }, deadlineMs);
+          sttClient.transcribe({
+            pcm16,
+            sampleRate: 16000,
+            language: agentConfig.language,
+          });
         });
-      });
-      transcript = (final.text ?? "").trim();
+        return (final.text ?? "").trim();
+      } finally {
+        if (watchdog) { clearTimeout(watchdog); watchdog = null; }
+        if (this.sttInFlight === sttClient) this.sttInFlight = null;
+        this.sttRejectInFlight = null;
+      }
+    };
+
+    try {
+      transcript = await runSttOnce();
       finalReceived = true;
     } catch (err) {
       sttErr = (err as Error).message;
-    } finally {
-      if (watchdog) { clearTimeout(watchdog); watchdog = null; }
-      // Clear handles so onStop() doesn't double-cancel a settled client and
-      // doesn't try to reject a promise that already resolved.
-      if (this.sttInFlight === sttClient) this.sttInFlight = null;
-      this.sttRejectInFlight = null;
+      // Turn-1 retry: cold-call STT failures are dominated by handshake / TLS
+      // setup race conditions that almost always succeed on the immediate
+      // second attempt. We retry ONLY on the first user turn, ONLY on
+      // transient-looking errors (timeouts / closes / network), and ONLY
+      // once. Subsequent turns rely on the warm socket so they don't need
+      // this safety net.
+      const transient =
+        sttErr.includes("timeout") ||
+        sttErr.includes("closed_without_response") ||
+        sttErr.includes("watchdog") ||
+        sttErr.includes("ECONN") ||
+        sttErr.includes("socket hang up") ||
+        sttErr.includes("network");
+      if (this.turnId === 0 && transient && !this.cancelled) {
+        // Bounded 2s deadline for the retry: the first attempt already burned
+        // up to STT_HARD_DEADLINE_MS; if we let the retry run for the same
+        // duration, dead air on a stuck second attempt would exceed 24s.
+        // 2s is enough for a fast warm-handshake-and-respond on a healthy
+        // network and fails fast otherwise so we can re-prompt the user.
+        const RETRY_DEADLINE_MS = 2000;
+        logger.warn(
+          { call_id: this.session.callSid, err: sttErr, retry_deadline_ms: RETRY_DEADLINE_MS },
+          "call_session_stt_turn1_retrying",
+        );
+        try {
+          transcript = await runSttOnce(RETRY_DEADLINE_MS);
+          finalReceived = true;
+          sttErr = null;
+        } catch (err2) {
+          sttErr = `retry: ${(err2 as Error).message}`;
+        }
+      }
     }
     // If onStop() fired during the await, drop the result and exit cleanly.
     if (this.cancelled) return;
@@ -640,7 +708,10 @@ export class CallSession {
       silence_timeout_reason: reason,
       sarvam_ws_errors: sttErr,
     };
-    logger.info(turnLog, "call_session_turn");
+    logger.info(
+      { ...turnLog, stt_attempts: sttAttempts, stt_used_warm_socket: sttUsedWarmSocket },
+      "call_session_turn",
+    );
 
     if (this.cancelled) return;
 
@@ -677,9 +748,20 @@ export class CallSession {
       return;
     }
 
-    const { text: agentText, shouldEnd } = await generateConversationResponse(
+    const { text: agentText, shouldEnd, chatMs, chatModel } = await generateConversationResponse(
       sessionState.messages,
       transcript,
+    );
+    logger.info(
+      {
+        call_id: this.session.callSid,
+        turn_id: this.turnId,
+        chat_ms: chatMs,
+        chat_model: chatModel,
+        should_end: shouldEnd,
+        agent_text_preview: agentText.slice(0, 200),
+      },
+      "call_session_chat_completed",
     );
     addTurn(this.session.callSid, transcript, agentText);
 
@@ -709,6 +791,10 @@ export class CallSession {
     this.botFirstFrameSentAtMs = null;
     this.transition("BOT_SPEAKING");
     this.botSpeakingStartMs = performance.now();
+    // Pre-warm the Sarvam STT WS during bot speech so the handshake cost
+    // (~300ms typical, observed up to 12s on cold turn-1) is paid before
+    // the user finishes their reply rather than after.
+    this.prewarmStt();
     await this.streamTtsToTwilio(text, myEpoch);
     // If a newer speak invocation has started (barge-in → next turn) while we
     // were awaiting our pipelined TTS promises, bail without touching state
@@ -722,6 +808,33 @@ export class CallSession {
       this.postBotTimer = null;
       this.startListening();
     }, POST_BOT_GRACE_MS);
+  }
+
+  /**
+   * Open a Sarvam STT WS in the background during BOT_SPEAKING, no-op if a
+   * warm socket already exists, no-op if cancelled or no API key. Failures
+   * are swallowed at info level — the cold path in flushAndProcess will pick
+   * up the slack so a prewarm error never breaks a turn.
+   */
+  private prewarmStt(): void {
+    if (this.cancelled || this.warmStt) return;
+    const client = new SarvamSttClient();
+    // CRITICAL: attach a no-op `error` listener BEFORE prewarm() fires.
+    // SarvamSttClient is an EventEmitter and `fail()` emits 'error'; without
+    // a listener, Node's EventEmitter throws and crashes the process. The
+    // prewarm path has no transcribe-time listeners attached yet, so we own
+    // the safety net here. runSttOnce will add its own 'error' listener
+    // later (multiple listeners are fine — both fire, prewarm noop ignores,
+    // runSttOnce rejects).
+    client.on("error", () => { /* swallowed — handled via prewarm() promise */ });
+    this.warmStt = client;
+    client.prewarm(agentConfig.language).catch((err) => {
+      logger.info(
+        { call_id: this.session.callSid, err: (err as Error).message },
+        "call_session_stt_prewarm_failed",
+      );
+      if (this.warmStt === client) this.warmStt = null;
+    });
   }
 
   private async speakAndEnd(text: string, reason: string): Promise<void> {
@@ -804,8 +917,15 @@ export class CallSession {
       }
       if (srcChannels === 2) pcm = stereoToMonoPcm16(pcm);
       if (srcRate !== 8000) {
-        if (i === 0) {
-          logger.warn(
+        if (!this.ttsResamplingNoticeLogged) {
+          // INFO not WARN: Sarvam Bulbul:v3 routinely ignores
+          // target_sample_rate_hz=8000 and returns 22050/24000 even when we
+          // ask for 8000. The on-the-fly resample is correct behaviour, not
+          // a fault — emitting a per-turn WARN was just spamming the log.
+          // Once-per-call info gives us the same observability without noise.
+          // See replit.md ("Sarvam TTS sample rate") for context.
+          this.ttsResamplingNoticeLogged = true;
+          logger.info(
             { call_id: this.session.callSid, srcRate, srcChannels, srcBits },
             "call_session_tts_resampling_to_8khz",
           );
@@ -831,16 +951,24 @@ export class CallSession {
           // gates on this so the user's "Hello?" on pickup doesn't kill
           // the greeting before they've heard anything.
           this.botFirstFrameSentAtMs = performance.now();
-          logger.info(
-            {
-              call_id: this.session.callSid,
-              turn_id: this.turnId,
-              ttfa_ms: Math.round(performance.now() - startedAtAll),
-              chunks: chunks.length,
-              first_chunk_chars: chunks[0].length,
-            },
-            "call_session_tts_first_frame",
-          );
+          {
+            const elapsed = Math.round(performance.now() - startedAtAll);
+            logger.info(
+              {
+                call_id: this.session.callSid,
+                turn_id: this.turnId,
+                // ttfa_ms preserved for log-search compatibility; tts_ms and
+                // first_wire_frame_ms are aliases that match the names other
+                // observability surfaces (dashboards, alerts) standardise on.
+                ttfa_ms: elapsed,
+                tts_ms: elapsed,
+                first_wire_frame_ms: elapsed,
+                chunks: chunks.length,
+                first_chunk_chars: chunks[0].length,
+              },
+              "call_session_tts_first_frame",
+            );
+          }
         }
 
         const targetMs = (sent + 1) * frameIntervalMs;

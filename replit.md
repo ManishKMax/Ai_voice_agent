@@ -265,6 +265,71 @@ Test lead 13: `yk` at `+919078802278` (verified Twilio trial destination)
   - Status Callback: `https://<your-domain>/api/call-status`
 - Error 21219 = unverified destination → lead is auto-marked `no_response`, never retried
 
+## Voice pipeline implementation choices
+
+### HTTP TTS (chosen) vs WebSocket TTS
+
+Phase-2 protocol discovery proved the public Sarvam TTS WebSocket only emits
+**MP3** frames — there is no PCM/WAV codec switch on the WS endpoint. Decoding
+MP3 in pure-JS for every turn is heavy (≈25-50 ms/sentence with native libs,
+much higher in pure JS) and would require a native dep that doesn't survive
+Replit's Nix container rebuilds.
+
+The HTTP TTS endpoint (`POST /text-to-speech`) returns 8 kHz mono WAV directly
+— telephony native — so we can strip the 44-byte RIFF header, μ-law encode,
+chunk into 160-byte (20 ms) frames and pace at real-time without any decoder.
+Trade-off: HTTP TTS is request/response (no chunked-streaming response body),
+so time-to-first-frame is bounded by the *first* sentence's TTS round-trip. We
+mitigate by sentence-chunking the reply (`splitForTTS`) and pipelining
+synthesis: chunk N+1 synthesizes while chunk N plays.
+
+### Sarvam TTS sample rate (`bulbul:v3` quirk)
+
+We send `target_sample_rate_hz: 8000` on every TTS request. Bulbul:v3
+**routinely ignores this** and returns 22050 Hz or 24000 Hz WAVs anyway. The
+on-the-fly resample in `streamTtsToTwilio` (`resamplePcm16Mono(pcm, srcRate,
+8000)`) is therefore expected behaviour, not a fault. We log it once per call
+at info level (`call_session_tts_resampling_to_8khz`) for observability — do
+NOT raise the level back to warn unless Sarvam fixes the underlying bug.
+
+### Boot-time enable_thinking probe
+
+`probeEnableThinking()` in `index.ts` fires one sarvam-m chat at startup with
+`chat_template_kwargs.enable_thinking: false` and inspects whether the raw
+content still contains a `<think>` block. Sarvam currently ignores the flag,
+so `stripThinking()` is required on every turn. If the probe ever logs
+`HONOURED`, we can drop `stripThinking()` and shrink `CHAT_MAX_TOKENS_CONVERSATION`
+from 2000 down to ~400 (recovering 200-1500 tokens of latency per turn).
+
+### STT pre-warm
+
+`CallSession` opens the Sarvam STT WS during BOT_SPEAKING (`prewarmStt()`) so
+the handshake cost — typically 300-800 ms, observed up to 12 s on cold
+turn-1 — is paid before the user finishes their reply rather than after.
+Idle warm sockets that the server closes mid-bot-speech are detected via
+`isWarm()` and replaced with a cold open. Turn 1 gets one extra retry on
+transient STT failure (timeouts / closes / network) since the very first
+handshake is the most failure-prone.
+
+### Transcript quality gate
+
+`assessTranscriptQuality()` (in `sarvam.service.ts`) refuses to call the
+LLM analyser on calls dominated by filler ("Yes", "Hmm", "OK") — the
+analyser will always return SOMETHING, including a confident "interested"
+classification, and that mis-classification was sending wasted demo invites.
+Threshold: ≥ 2 user utterances of ≥ 3 words each AND ≥ 10 cumulative user
+words (BOTH must hold — a single long reply alone is not enough signal). Failed gates are returned as `interest=low / nextAction=follow_up`
+with a `lowInformation: true` flag and a summary that asks for manual review.
+
+### Per-commit voice acceptance stub
+
+`pnpm --filter @workspace/scripts run voice-acceptance-stub` runs in <1s
+with no network calls and verifies the codec round-trip, RMS calculation,
+WAV writer, STT response parser (against `scripts/fixtures/sarvam-stt-response.json`),
+transcript quality gate, and `splitForTTS` chunking. Wired as the
+`voice-acceptance-stub` validation command — fails the build if any of those
+pure-code paths regress.
+
 ## Development Notes
 
 - Twilio signature validation is **skipped** in `NODE_ENV=development`

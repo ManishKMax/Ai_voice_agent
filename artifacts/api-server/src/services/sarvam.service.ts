@@ -224,12 +224,21 @@ export async function generateSpeech(
  * Generate the agent's next conversational response using Sarvam Chat (sarvam-105b).
  * Returns { text, shouldEnd } where shouldEnd is true if the agent sent [DONE].
  */
+export interface ChatResult {
+  text: string;
+  shouldEnd: boolean;
+  /** Wall-clock ms spent in the chat call (sum across primary + fallback). */
+  chatMs: number;
+  /** Model that produced the returned text (or the last model attempted). */
+  chatModel: string;
+}
+
 export async function generateConversationResponse(
   messages: ConversationMessage[],
   userInput: string
-): Promise<{ text: string; shouldEnd: boolean }> {
+): Promise<ChatResult> {
   if (!config.sarvam.apiKey) {
-    return { text: "Thank you for your time. Goodbye!", shouldEnd: true };
+    return { text: "Thank you for your time. Goodbye!", shouldEnd: true, chatMs: 0, chatModel: "none" };
   }
 
   // Cap prompt size: keep the system message (always at index 0) plus the
@@ -250,13 +259,15 @@ export async function generateConversationResponse(
   // slower model (sarvam-30b 3-28s) would just push the caller past their
   // patience window. Return a soft filler so the call stays alive and the
   // user can repeat themselves.
+  const t0 = Date.now();
   const primary = await callSarvamChat(
     CHAT_MODEL_CONVERSATION,
     fullMessages,
     CHAT_MAX_TOKENS_CONVERSATION,
   );
+  const primaryMs = Date.now() - t0;
   if (primary.text) {
-    return primary;
+    return { text: primary.text, shouldEnd: primary.shouldEnd, chatMs: primaryMs, chatModel: CHAT_MODEL_CONVERSATION };
   }
 
   // If a non-sarvam-m model was forced via env and it returned empty, try
@@ -266,20 +277,34 @@ export async function generateConversationResponse(
       { primaryReason: primary.failureReason, primaryModel: CHAT_MODEL_CONVERSATION },
       "Primary chat empty — falling back to sarvam-m",
     );
+    const t1 = Date.now();
     const fallback = await callSarvamChat("sarvam-m", fullMessages, CHAT_MAX_TOKENS_CONVERSATION);
-    if (fallback.text) return fallback;
+    const fallbackMs = Date.now() - t1;
+    if (fallback.text) {
+      return { text: fallback.text, shouldEnd: fallback.shouldEnd, chatMs: primaryMs + fallbackMs, chatModel: "sarvam-m" };
+    }
     logger.warn(
       { fallbackReason: fallback.failureReason },
       "sarvam-m fallback also empty — soft retry filler",
     );
-  } else {
-    logger.warn(
-      { primaryReason: primary.failureReason },
-      "sarvam-m returned empty — soft retry filler",
-    );
+    return {
+      text: "Sorry, ek second — kya aap dohra sakte hain?",
+      shouldEnd: false,
+      chatMs: primaryMs + fallbackMs,
+      chatModel: "sarvam-m",
+    };
   }
 
-  return { text: "Sorry, ek second — kya aap dohra sakte hain?", shouldEnd: false };
+  logger.warn(
+    { primaryReason: primary.failureReason },
+    "sarvam-m returned empty — soft retry filler",
+  );
+  return {
+    text: "Sorry, ek second — kya aap dohra sakte hain?",
+    shouldEnd: false,
+    chatMs: primaryMs,
+    chatModel: CHAT_MODEL_CONVERSATION,
+  };
 }
 
 /**
@@ -418,14 +443,86 @@ export async function transcribeAudio(
   }
 }
 
+export interface TranscriptQuality {
+  /** True when the transcript has enough signal to trust an LLM classification. */
+  hasEnoughSignal: boolean;
+  userUtteranceCount: number;
+  qualifyingUtteranceCount: number;
+  totalUserWords: number;
+  reason: string;
+}
+
+/**
+ * Inspect the conversation transcript (format: alternating "Lead: ...\nAgent: ...\n"
+ * lines emitted by `conversation-state.addTurn`) and decide whether the lead
+ * gave us enough to classify them. Calls dominated by filler ("Yes.", "Hmm.",
+ * "OK") routinely flipped leads to "interested" before this gate existed
+ * because the Sarvam analyser will always return SOMETHING — even a JSON
+ * default when fed a near-empty input.
+ *
+ * Threshold: ≥ 2 user utterances of ≥ 3 words each, OR cumulative ≥ 10 words.
+ */
+export function assessTranscriptQuality(transcript: string): TranscriptQuality {
+  const userLines = transcript
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("Lead:"))
+    .map((l) => l.slice("Lead:".length).trim())
+    .filter((l) => l.length > 0);
+  const userWordsByUtt = userLines.map((u) => u.split(/\s+/).filter(Boolean).length);
+  const totalUserWords = userWordsByUtt.reduce((a, b) => a + b, 0);
+  const qualifying = userWordsByUtt.filter((w) => w >= 3).length;
+  // BOTH thresholds must be satisfied to permit LLM classification. A single
+  // long utterance (10+ words) without a second confirming reply is still
+  // low information — the LLM otherwise happily over-classifies it as
+  // "interested" and we send a wasted demo invite. Symmetrically, two short
+  // "yes/ok" replies aren't enough either. Refuse when EITHER fails.
+  const hasEnoughSignal = qualifying >= 2 && totalUserWords >= 10;
+  const reason = hasEnoughSignal
+    ? "ok"
+    : `low_information: ${userLines.length} user utterances, ${qualifying} ≥3-word, ${totalUserWords} total words`;
+  return {
+    hasEnoughSignal,
+    userUtteranceCount: userLines.length,
+    qualifyingUtteranceCount: qualifying,
+    totalUserWords,
+    reason,
+  };
+}
+
 /**
  * Analyse a completed call transcript and classify the lead.
+ *
+ * Two safeguards layered on top of the raw Sarvam call:
+ *   1. Pre-LLM quality gate (assessTranscriptQuality) — refuses to classify
+ *      low-information calls instead of letting the analyser hallucinate
+ *      "interested" off a single "Yes."
+ *   2. Per-model fallback — sarvam-30b is the default analyser but is the
+ *      same model that's been observed returning intermittent 4xx/5xx; on
+ *      any non-2xx, retry once with sarvam-m before giving up. This costs
+ *      one extra HTTP call ONLY on actual analyser failure (never on the
+ *      hot voice path).
  */
 export async function analyzeTranscript(transcript: string): Promise<{
   interest: "high" | "medium" | "low";
   nextAction: "demo" | "follow_up" | "drop";
   summary: string;
+  lowInformation?: boolean;
 }> {
+  const quality = assessTranscriptQuality(transcript);
+  if (!quality.hasEnoughSignal) {
+    logger.info(
+      { quality },
+      "analyzeTranscript_low_information_skipping_llm",
+    );
+    return {
+      interest: "low",
+      nextAction: "follow_up",
+      summary: `Low-information call: ${quality.userUtteranceCount} user utterance(s), ${quality.totalUserWords} total words. Manual review recommended.`,
+      lowInformation: true,
+    };
+  }
+
   const prompt = `You are a lead qualification analyst. Analyse this sales call transcript and respond ONLY with valid JSON.
 
 Transcript:
@@ -436,38 +533,57 @@ ${transcript}
 Respond with exactly this JSON (no markdown, no extra text):
 {"interest":"high"|"medium"|"low","nextAction":"demo"|"follow_up"|"drop","summary":"one sentence summary"}`;
 
-  try {
-    const response = await fetch(CHAT_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "api-subscription-key": config.sarvam.apiKey,
-      },
-      body: JSON.stringify({
-        model: CHAT_MODEL_ANALYSIS,
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.1,
-        max_tokens: 2000,
-      }),
-    });
+  const tryModel = async (model: string): Promise<{
+    interest: "high" | "medium" | "low";
+    nextAction: "demo" | "follow_up" | "drop";
+    summary: string;
+  } | { httpError: number } | { exception: string }> => {
+    try {
+      const response = await fetch(CHAT_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "api-subscription-key": config.sarvam.apiKey,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.1,
+          max_tokens: 2000,
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        logger.warn({ model, status: response.status, body: body.slice(0, 200) }, "analyzeTranscript_http_error");
+        return { httpError: response.status };
+      }
+      const data = (await response.json()) as { choices: Array<{ message: { content: string } }> };
+      const content = data.choices[0]?.message?.content ?? "{}";
+      const cleaned = stripThinking(content).replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(cleaned || "{}");
+      return {
+        interest: parsed.interest ?? "low",
+        nextAction: parsed.nextAction ?? "drop",
+        summary: parsed.summary ?? "",
+      };
+    } catch (err) {
+      return { exception: (err as Error).message };
+    }
+  };
 
-    if (!response.ok) throw new Error(`Sarvam chat ${response.status}`);
+  const primary = await tryModel(CHAT_MODEL_ANALYSIS);
+  if ("interest" in primary) return primary;
 
-    const data = (await response.json()) as {
-      choices: Array<{ message: { content: string } }>;
-    };
-    const content = data.choices[0]?.message?.content ?? "{}";
-    // Strip <think> blocks first (sarvam-105b emits them too) then code fences.
-    const cleaned = stripThinking(content).replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(cleaned || "{}");
-
-    return {
-      interest: parsed.interest ?? "low",
-      nextAction: parsed.nextAction ?? "drop",
-      summary: parsed.summary ?? "",
-    };
-  } catch (err) {
-    logger.error({ err }, "Sarvam transcript analysis failed");
-    return { interest: "low", nextAction: "drop", summary: "Analysis failed" };
+  // Fallback to sarvam-m on any 4xx/5xx or exception. sarvam-m is the
+  // primary live-conversation model — proven reliable, just slower for
+  // post-call reasoning. One extra HTTP call only on analyser failure.
+  if (CHAT_MODEL_ANALYSIS !== "sarvam-m") {
+    logger.warn({ primary, fallback: "sarvam-m" }, "analyzeTranscript_falling_back_to_sarvam_m");
+    const fallback = await tryModel("sarvam-m");
+    if ("interest" in fallback) return fallback;
+    logger.error({ primary, fallback }, "analyzeTranscript both models failed");
+  } else {
+    logger.error({ primary }, "analyzeTranscript_failed_no_fallback");
   }
+  return { interest: "low", nextAction: "drop", summary: "Analysis failed" };
 }

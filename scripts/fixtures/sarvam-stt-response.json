@@ -1,0 +1,8 @@
+{
+  "_comment": "Captured Sarvam STT WS final-frame shape (May 2026). Used by voice-acceptance-stub.ts to verify the SarvamSttClient response parser without hitting the live Sarvam API. Update this fixture if Sarvam ever changes the response shape — the stub will fail and force a parser update.",
+  "data": {
+    "transcript": "Haan, mujhe interest hai. Kya aap demo schedule kar sakte hain?",
+    "language_code": "hi-IN",
+    "request_id": "fixture-req-0000-0000-0000"
+  }
+}

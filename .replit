@@ -20,6 +20,10 @@ author = "agent"
 task = "workflow.run"
 args = "GitHub Sync Watcher"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "voice-acceptance-stub"
+
 [[workflows.workflow]]
 name = "GitHub Sync Watcher"
 author = "agent"
@@ -30,6 +34,17 @@ args = "bash scripts/github-sync-watcher.sh"
 
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow]]
+name = "voice-acceptance-stub"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/scripts run voice-acceptance-stub"
+
+[workflows.workflow.metadata]
+isValidation = true
 
 [agent]
 stack = "PNPM_WORKSPACE"

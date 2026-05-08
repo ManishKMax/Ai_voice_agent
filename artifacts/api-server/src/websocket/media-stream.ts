@@ -41,6 +41,8 @@ export interface MediaStreamSession {
   rmsSum: number;
   /** Number of chunks whose RMS was sampled (used to compute average). */
   rmsCount: number;
+  /** True once stop has been signalled — guards against double-onStop. */
+  stopped: boolean;
   /** Send an outbound μ-law-encoded audio payload back to Twilio. */
   sendAudio(muLawPayload: Buffer): void;
   /** Send a Twilio "mark" event (echoed back when playback completes). */
@@ -112,6 +114,7 @@ function buildSession(ws: WebSocket, start: {
     totalAudioBytes: 0,
     rmsSum: 0,
     rmsCount: 0,
+    stopped: false,
     sendAudio(payload: Buffer) {
       if (ws.readyState !== ws.OPEN) return;
       ws.send(JSON.stringify({
@@ -158,24 +161,29 @@ export function attachMediaStreamServer(httpServer: HttpServer): void {
     const remote = req.socket.remoteAddress;
     logger.info({ remote }, "MediaStream WS connection opened");
 
+    /** Invoke subscriber.onStop at most once per session. */
+    const notifyStop = (): void => {
+      if (!session || session.stopped) return;
+      session.stopped = true;
+      subscriber?.handler.onStop?.(session);
+    };
+
     ws.on("message", (raw) => {
-      let msg: any;
-      try {
-        msg = JSON.parse(raw.toString());
-      } catch (err) {
-        logger.warn({ err }, "MediaStream non-JSON frame ignored");
-        return;
-      }
-      const event = msg.event as string | undefined;
-      if (!event) return;
+      const parsed = parseTwilioFrame(raw.toString());
+      if (!parsed) return;
+      const event = parsed.event;
 
       switch (event) {
         case "connected":
-          logger.info({ protocol: msg.protocol, version: msg.version }, "MediaStream connected");
+          logger.info(
+            { protocol: parsed.protocol ?? null, version: parsed.version ?? null },
+            "MediaStream connected",
+          );
           break;
 
         case "start": {
-          const start = msg.start ?? {};
+          const start = parsed.start;
+          if (!start) return;
           session = buildSession(ws, start);
           subscriber = pickSubscriber(session.callSid, session.customParameters);
           logger.info(
@@ -196,11 +204,11 @@ export function attachMediaStreamServer(httpServer: HttpServer): void {
 
         case "media": {
           if (!session) return;
-          const media = msg.media ?? {};
-          const payloadB64 = media.payload as string | undefined;
+          const media = parsed.media;
+          const payloadB64 = media?.payload;
           if (!payloadB64) return;
           const payload = Buffer.from(payloadB64, "base64");
-          const ts = Number(media.timestamp ?? 0);
+          const ts = Number(media?.timestamp ?? 0);
           session.chunkCount++;
           session.totalAudioBytes += payload.length;
           // Cheap per-chunk audio-health metric (~few µs / 160-byte frame) so
@@ -216,7 +224,7 @@ export function attachMediaStreamServer(httpServer: HttpServer): void {
 
         case "mark": {
           if (!session) return;
-          const name = (msg.mark?.name as string) ?? "";
+          const name = parsed.mark?.name ?? "";
           subscriber?.handler.onMark?.(session, name);
           break;
         }
@@ -247,7 +255,7 @@ export function attachMediaStreamServer(httpServer: HttpServer): void {
               },
               "MediaStream session stopped",
             );
-            subscriber?.handler.onStop?.(session);
+            notifyStop();
           }
           break;
         }
@@ -259,10 +267,9 @@ export function attachMediaStreamServer(httpServer: HttpServer): void {
     });
 
     ws.on("close", (code, reason) => {
-      if (session) {
-        // If Twilio drops the connection without a "stop" event, still notify.
-        subscriber?.handler.onStop?.(session);
-      }
+      // If Twilio drops the connection without a "stop" event, still notify
+      // — but only if we haven't already (notifyStop is idempotent).
+      notifyStop();
       logger.info(
         { code, reason: reason?.toString() ?? "", callSid: session?.callSid ?? null },
         "MediaStream WS closed",
@@ -275,4 +282,64 @@ export function attachMediaStreamServer(httpServer: HttpServer): void {
   });
 
   logger.info({ path: MEDIA_STREAM_PATH }, "MediaStream WebSocket server attached");
+}
+
+// ── Twilio frame typing & safe parser ──────────────────────────────────────
+//
+// Narrow typed union for the JSON envelopes Twilio Media Streams sends. We
+// validate just enough at the boundary to consume them safely without `any`.
+
+interface TwilioStartFrame {
+  event: "start";
+  start?: {
+    streamSid: string;
+    callSid: string;
+    customParameters?: Record<string, string>;
+    mediaFormat?: Partial<MediaStreamFormat>;
+  };
+}
+interface TwilioMediaFrame {
+  event: "media";
+  media?: { payload?: string; timestamp?: string | number; track?: string };
+}
+interface TwilioMarkFrame {
+  event: "mark";
+  mark?: { name?: string };
+}
+interface TwilioStopFrame {
+  event: "stop";
+  stop?: { accountSid?: string; callSid?: string };
+}
+interface TwilioConnectedFrame {
+  event: "connected";
+  protocol?: string;
+  version?: string;
+}
+type TwilioFrame =
+  | TwilioConnectedFrame
+  | TwilioStartFrame
+  | TwilioMediaFrame
+  | TwilioMarkFrame
+  | TwilioStopFrame;
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+const KNOWN_EVENTS = new Set(["connected", "start", "media", "mark", "stop"]);
+
+function parseTwilioFrame(raw: string): TwilioFrame | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    logger.warn({ err }, "MediaStream non-JSON frame ignored");
+    return null;
+  }
+  if (!isRecord(parsed)) return null;
+  const event = parsed["event"];
+  if (typeof event !== "string" || !KNOWN_EVENTS.has(event)) return null;
+  // Trust Twilio's envelope shape per its documented protocol; we narrow at
+  // each case site rather than over-validating here.
+  return parsed as unknown as TwilioFrame;
 }

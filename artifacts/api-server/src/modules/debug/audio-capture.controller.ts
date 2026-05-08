@@ -288,7 +288,14 @@ export function audioCaptureTwiml(req: Request, res: Response): void {
   res.send(twiml);
 }
 
-/** GET /api/debug/audio-capture/:id — return summary + WAV download links. */
+/**
+ * GET /api/debug/audio-capture/:id — content-negotiated retrieval.
+ *
+ * Per the task spec, this route returns the saved WAV file for download by
+ * default. Pass `?format=summary` (or send `Accept: application/json`) to get
+ * the JSON audio-health summary instead, and `?format=ulaw` for the raw μ-law
+ * payload.
+ */
 export async function getAudioCapture(req: Request, res: Response): Promise<void> {
   const id = String(req.params["id"] ?? "");
   const summary = summariesById.get(id);
@@ -296,10 +303,33 @@ export async function getAudioCapture(req: Request, res: Response): Promise<void
     res.status(404).json({ error: "Capture not found" });
     return;
   }
-  res.json(summary);
+  const queryFormat = String(req.query["format"] ?? "").toLowerCase();
+  const wantsJson =
+    queryFormat === "summary" ||
+    queryFormat === "json" ||
+    (req.headers["accept"]?.includes("application/json") && !queryFormat);
+
+  if (wantsJson) {
+    res.json(summary);
+    return;
+  }
+
+  const wantsRaw = queryFormat === "ulaw" || queryFormat === "raw";
+  const filePath = wantsRaw ? summary.files.rawUlaw : summary.files.normalizedWav;
+  const contentType = wantsRaw ? "audio/basic" : "audio/wav";
+  const ext = wantsRaw ? "ulaw" : "wav";
+  try {
+    const buf = await fs.readFile(filePath);
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${id}.${ext}"`);
+    res.send(buf);
+  } catch (err) {
+    req.log.warn({ err, id, format: queryFormat }, "Audio capture: file read failed");
+    res.status(404).json({ error: "File not found on disk" });
+  }
 }
 
-/** GET /api/debug/audio-capture/:id/file/:kind — kind = wav | ulaw */
+/** GET /api/debug/audio-capture/:id/file/:kind — explicit kind = wav | ulaw */
 export async function getAudioCaptureFile(req: Request, res: Response): Promise<void> {
   const id = String(req.params["id"] ?? "");
   const kind = String(req.params["kind"] ?? "");

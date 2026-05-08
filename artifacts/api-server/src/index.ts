@@ -7,6 +7,9 @@ import { resetStuckCallingLeads } from "./modules/leads/leads.service.js";
 import { loadAgentConfig } from "./config/agent.config.js";
 import { loadPlatformSettings } from "./config/platform.config.js";
 import { attachMediaStreamServer } from "./websocket/media-stream.js";
+// Importing for side effects: registers the Phase-3 CallSession subscriber on
+// the Media Streams server so live WS calls (VOICE_PIPELINE=ws) get handled.
+import "./websocket/call-session.js";
 
 const rawPort = process.env["PORT"];
 if (!rawPort) {

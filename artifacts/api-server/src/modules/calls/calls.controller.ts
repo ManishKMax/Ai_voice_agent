@@ -182,6 +182,18 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
   const body = req.body as Record<string, string>;
   const callSid = body.CallSid ?? "";
 
+  // Phase 3 feature flag: when VOICE_PIPELINE=ws, route the call's audio
+  // through our Media Streams WebSocket pipeline (CallSession state machine
+  // + Sarvam STT/TTS). Default `gather` keeps the existing Twilio <Gather>
+  // pipeline live for instant rollback. The Gather code path below is left
+  // intact behind the flag and will be archived in a later cleanup.
+  const pipeline = (process.env["VOICE_PIPELINE"] ?? "gather").toLowerCase();
+  if (pipeline === "ws") {
+    req.log.info({ leadId, callSid, pipeline }, "Voice webhook — routing to WS pipeline");
+    xmlResponse(res, generateMediaStreamTwiML(leadId || undefined));
+    return;
+  }
+
   logger.info({ leadId, callSid }, "Voice webhook — generating greeting");
 
   try {

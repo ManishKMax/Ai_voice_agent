@@ -27,6 +27,7 @@ import {
 } from "../config/agent.config.js";
 import {
   createSession,
+  getSession,
   addAgentOpening,
   addTurn,
   endSession,
@@ -396,7 +397,10 @@ class CallSession {
     }
 
     // Short Hinglish-friendly re-prompt — NOT a hard "I could not hear you"
-    // terminator. Per spec.
+    // terminator. Per spec. Reset buffers first so prior silence frames don't
+    // bleed into the re-prompt's listening window (parity with noise-only
+    // path).
+    this.resetTurnBuffers();
     const rePrompt =
       agentConfig.language === "hi-IN" || agentConfig.language === "en-IN"
         ? "Hello, kya aap sun rahe hain?"
@@ -509,9 +513,7 @@ class CallSession {
     this.resetTurnBuffers();
     this.rePromptCount = 0;
 
-    const sessionState = (await import("../services/conversation-state.js")).getSession(
-      this.session.callSid,
-    );
+    const sessionState = getSession(this.session.callSid);
     if (!sessionState) {
       logger.warn({ callSid: this.session.callSid }, "call_session_lost_conversation_state");
       await this.speakAndEnd("Thank you for your time. Goodbye!", "session_lost");

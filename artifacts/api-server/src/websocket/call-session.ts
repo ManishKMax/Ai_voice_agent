@@ -145,6 +145,8 @@ class CallSession {
   private finalised = false;
   /** Active in-flight STT client, so onStop() can abort it cleanly. */
   private sttInFlight: SarvamSttClient | null = null;
+  /** Reject handle for the active STT promise so cancel settles the await. */
+  private sttRejectInFlight: ((err: Error) => void) | null = null;
 
   constructor(session: MediaStreamSession) {
     this.session = session;
@@ -239,6 +241,13 @@ class CallSession {
     if (this.sttInFlight) {
       try { this.sttInFlight.cancel(); } catch { /* ignore */ }
       this.sttInFlight = null;
+    }
+    // Settle the pending await deterministically — cancel() may not fire
+    // `final` or `error` after marking the client closed, which would leave
+    // the flushAndProcess promise dangling for the lifetime of the process.
+    if (this.sttRejectInFlight) {
+      try { this.sttRejectInFlight(new Error("call_session_stopped")); } catch { /* ignore */ }
+      this.sttRejectInFlight = null;
     }
     logger.info(
       { call_id: this.session.callSid, finalState: this.state },
@@ -440,6 +449,9 @@ class CallSession {
     this.sttInFlight = sttClient;
     try {
       const final = await new Promise<{ text: string }>((resolve, reject) => {
+        // Expose reject so onStop() can settle this promise immediately when
+        // cancel() doesn't trigger a `final`/`error` event from the client.
+        this.sttRejectInFlight = reject;
         sttClient.on("final", (ev) => resolve({ text: ev.text }));
         sttClient.on("error", (err) => reject(err));
         sttClient.transcribe({
@@ -453,8 +465,10 @@ class CallSession {
     } catch (err) {
       sttErr = (err as Error).message;
     } finally {
-      // Clear the handle so onStop() doesn't double-cancel a settled client.
+      // Clear handles so onStop() doesn't double-cancel a settled client and
+      // doesn't try to reject a promise that already resolved.
       if (this.sttInFlight === sttClient) this.sttInFlight = null;
+      this.sttRejectInFlight = null;
     }
     // If onStop() fired during the await, drop the result and exit cleanly.
     if (this.cancelled) return;

@@ -17,14 +17,21 @@ const CHAT_MODEL_CONVERSATION = process.env.SARVAM_CHAT_MODEL ?? "sarvam-30b";
 // is also clean+fast for JSON, so default to it. Override via env.
 const CHAT_MODEL_ANALYSIS = process.env.SARVAM_ANALYSIS_MODEL ?? "sarvam-30b";
 // Token budgets per model — empirically tuned (May 2026):
-//   sarvam-30b : 1024 is the sweet spot. Lower (256/512) silently fails with
-//                empty content + finish_reason=length on long system prompts;
-//                higher (2048) regularly times out at ~15s with empty output.
-//                1024 lands clean replies in ~1s.
+//   sarvam-30b : 384 is the live-voice sweet spot. Replies in this flow are
+//                1-3 sentences, so 384 ships sooner (model stops generating
+//                earlier → TTS starts earlier). 1024 was the previous default
+//                but gave the model headroom to ramble in multi-turn calls,
+//                pushing per-turn LLM latency from ~1s to 2-3s by turn 4-5.
+//                Lower than 256 silently fails on long system prompts.
 //   sarvam-m / sarvam-105b: thinking models — 1500 leaves room to think AND
 //                answer. <think> block alone eats 200-500 tokens.
 const CHAT_MAX_TOKENS_CONVERSATION =
-  CHAT_MODEL_CONVERSATION === "sarvam-30b" ? 1024 : 1500;
+  CHAT_MODEL_CONVERSATION === "sarvam-30b" ? 384 : 1500;
+// Cap how many prior turns we send to the LLM. Sarvam-30b latency grows
+// roughly linearly with prompt length, so a 10-turn call would ship ~3x
+// slower than turn 1 if we replayed everything. The system prompt is always
+// kept; only the trailing user/assistant turns are sliced.
+const CHAT_HISTORY_MAX_TURNS = 6;
 const TTS_MODEL = "bulbul:v3";
 const STT_MODEL = "saaras:v3";
 
@@ -50,6 +57,78 @@ export function stripThinking(text: string): string {
   const openIdx = out.search(/<think>/i);
   if (openIdx !== -1) out = out.slice(0, openIdx);
   return out.trim();
+}
+
+/**
+ * Split a reply into TTS-sized chunks at sentence/clause boundaries so the
+ * caller can pipeline synthesis and playback: synthesize chunk N+1 while
+ * playing chunk N. Time-to-first-audio is then bounded by the *first*
+ * chunk's TTS cost, not the whole reply's.
+ *
+ * Sarvam HTTP TTS does not stream the response body — it returns the full
+ * WAV as base64 in JSON. Sentence chunking is therefore the realistic way
+ * to get sub-second time-to-first-frame on multi-sentence replies.
+ */
+export function splitForTTS(text: string, maxChars = 200): string[] {
+  const t = text.trim();
+  if (!t) return [];
+  if (t.length <= maxChars) return [t];
+
+  // Split on sentence terminators (English + Hindi danda) and keep the
+  // terminator with the preceding chunk for natural prosody.
+  const parts = t
+    .split(/(?<=[.!?।])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  // Re-pack: any single piece longer than maxChars gets split on commas/
+  // semicolons; consecutive short pieces get glued so we don't ship a flood
+  // of 5-char chunks.
+  const out: string[] = [];
+  let buf = "";
+  for (const p of parts) {
+    if (p.length > maxChars) {
+      if (buf) { out.push(buf); buf = ""; }
+      // Split a runaway piece at clause boundaries first.
+      const sub = p.match(/[^,;]+[,;]?\s*/g) ?? [p];
+      let inner = "";
+      for (const s of sub) {
+        if ((inner + s).length > maxChars && inner) {
+          out.push(inner.trim());
+          inner = s;
+        } else {
+          inner += s;
+        }
+      }
+      // Any clause-fragment still longer than maxChars (e.g. an unpunctuated
+      // wall of text) is hard-cut at maxChars boundaries, preferring the
+      // last whitespace inside the window so we don't slice mid-word. This
+      // is the true safety net — without it, oversized chunks reach
+      // generateSpeech() and get silently truncated to 480 chars, dropping
+      // the tail of the reply.
+      const flush = (s: string): void => {
+        let rest = s.trim();
+        while (rest.length > maxChars) {
+          const slice = rest.slice(0, maxChars);
+          const lastSpace = slice.lastIndexOf(" ");
+          const cut = lastSpace > maxChars * 0.5 ? lastSpace : maxChars;
+          out.push(rest.slice(0, cut).trim());
+          rest = rest.slice(cut).trim();
+        }
+        if (rest) out.push(rest);
+      };
+      if (inner.trim()) flush(inner);
+      continue;
+    }
+    if ((buf + " " + p).trim().length > maxChars) {
+      if (buf) out.push(buf);
+      buf = p;
+    } else {
+      buf = buf ? `${buf} ${p}` : p;
+    }
+  }
+  if (buf) out.push(buf);
+  return out;
 }
 
 export function truncateForTTS(text: string, maxChars = TTS_MAX_CHARS): string {
@@ -146,8 +225,16 @@ export async function generateConversationResponse(
     return { text: "Thank you for your time. Goodbye!", shouldEnd: true };
   }
 
+  // Cap prompt size: keep the system message (always at index 0) plus the
+  // last N user/assistant turns. Prevents per-turn LLM latency from growing
+  // unboundedly as the conversation goes on.
+  const systemMsg = messages[0]?.role === "system" ? [messages[0]] : [];
+  const tail = messages
+    .slice(systemMsg.length)
+    .slice(-CHAT_HISTORY_MAX_TURNS * 2); // user+assistant per turn
   const fullMessages = [
-    ...messages,
+    ...systemMsg,
+    ...tail,
     { role: "user" as const, content: userInput },
   ];
 
@@ -209,7 +296,11 @@ async function callSarvamChat(
       body: JSON.stringify({
         model,
         messages,
-        temperature: 0.7,
+        // Live voice replies should be short, on-topic and predictable.
+        // Lower temperature reduces rambling; presence_penalty discourages
+        // repeating earlier phrases (a common failure mode on long calls).
+        temperature: 0.3,
+        presence_penalty: 0.6,
         max_tokens: maxTokens,
       }),
     });

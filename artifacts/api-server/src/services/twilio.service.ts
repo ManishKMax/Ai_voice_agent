@@ -77,13 +77,14 @@ export function generateInitialTwiML(
   // even when the caller stays silent past the timeout. Without it, Twilio
   // silently falls through to the next verb (which used to be <Hangup/>),
   // cutting the call instead of giving us a chance to re-prompt.
-  // speechTimeout="1" — finish on 1s of silence (Twilio integer min). "auto"
-  // would wait 1.5-2s, hurting roundtrip. Sub-second silence detection is not
-  // possible with <Gather> (would require Twilio Media Streams + Sarvam STT).
+  // speechTimeout="auto" — Twilio's enhanced VAD endpoints faster than the
+  // integer 1s minimum on short replies. Only used by the legacy Gather
+  // pipeline (production now defaults to VOICE_PIPELINE=ws which uses our
+  // own VAD over Media Streams).
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Gather input="speech dtmf" action="${gatherAction}" method="POST"
-          language="${language}" speechTimeout="1" timeout="10"
+          language="${language}" speechTimeout="auto" timeout="10"
           maxSpeechTime="20" finishOnKey=""
           speechModel="phone_call" enhanced="true"
           actionOnEmptyResult="true"
@@ -127,7 +128,7 @@ export function generateRespondTwiML(
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Gather input="speech dtmf" action="${gatherAction}" method="POST"
-          language="${language}" speechTimeout="1" timeout="10"
+          language="${language}" speechTimeout="auto" timeout="10"
           maxSpeechTime="20" finishOnKey=""
           speechModel="phone_call" enhanced="true"
           actionOnEmptyResult="true"
@@ -198,7 +199,7 @@ export function generateSayTwiML(
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Gather input="speech dtmf" action="${gatherAction}" method="POST"
-          language="${language}" speechTimeout="1" timeout="10"
+          language="${language}" speechTimeout="auto" timeout="10"
           maxSpeechTime="20" finishOnKey=""
           speechModel="phone_call" enhanced="true"
           actionOnEmptyResult="true"

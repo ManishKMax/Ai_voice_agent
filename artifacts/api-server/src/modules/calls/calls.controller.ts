@@ -182,12 +182,12 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
   const body = req.body as Record<string, string>;
   const callSid = body.CallSid ?? "";
 
-  // Phase 3 feature flag: when VOICE_PIPELINE=ws, route the call's audio
-  // through our Media Streams WebSocket pipeline (CallSession state machine
-  // + Sarvam STT/TTS). Default `gather` keeps the existing Twilio <Gather>
-  // pipeline live for instant rollback. The Gather code path below is left
-  // intact behind the flag and will be archived in a later cleanup.
-  const pipeline = (process.env["VOICE_PIPELINE"] ?? "gather").toLowerCase();
+  // Phase 3+ feature flag: route the call's audio through our Media Streams
+  // WebSocket pipeline (CallSession state machine + Sarvam STT/TTS). Default
+  // is `ws` — it bypasses the filler/poll loop, streams TTS frame-by-frame,
+  // and supports barge-in. The legacy Gather pipeline below is retained
+  // behind `VOICE_PIPELINE=gather` for instant rollback.
+  const pipeline = (process.env["VOICE_PIPELINE"] ?? "ws").toLowerCase();
   if (pipeline === "ws") {
     // Phase 4: ask the per-tenant IVR adapter to produce its connect
     // response (TwiML for Twilio, app-bazaar XML for Exotel, etc.).

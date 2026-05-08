@@ -21,6 +21,7 @@ import {
   generateSpeech,
   generateConversationResponse,
   analyzeTranscript,
+  splitForTTS,
 } from "../services/sarvam.service.js";
 import { SarvamSttClient } from "../services/sarvam-stt-ws.client.js";
 import {
@@ -93,6 +94,9 @@ const SILENCE_RMS_THRESHOLD  = envInt("VOICE_SILENCE_RMS_THRESHOLD",   350,   1,
 const HEALTH_GATE_AFTER_MS   = envInt("VOICE_HEALTH_GATE_AFTER_MS",   6000, 1000, 60000);
 const MIN_SPEECH_MS          = envInt("VOICE_MIN_SPEECH_MS",           300,   0, 5000);
 const MAX_LISTEN_MS          = envInt("VOICE_MAX_LISTEN_MS",         12000, 2000, 60000);
+// Barge-in: minimum sustained speech duration (ms) during BOT_SPEAKING that
+// counts as the user interrupting. Set <=0 to disable barge-in.
+const BARGE_IN_MIN_MS        = envInt("VOICE_BARGE_IN_MIN_MS",         200,   0, 5000);
 
 interface PerTurnLog {
   call_id: string;
@@ -137,6 +141,11 @@ export class CallSession {
   private speechFirstAtMs: number | null = null;
   private speechLastAtMs: number | null = null;
 
+  // Barge-in: timestamp of the first sustained-speech frame observed during
+  // BOT_SPEAKING. Reset whenever we see a quiet frame so noise blips don't
+  // accumulate into a false interruption.
+  private bargeInFirstAtMs: number | null = null;
+
   // Monotonic timestamps for the current turn.
   private botSpeakingStartMs: number | null = null;
   private botSpeakingEndMs: number | null = null;
@@ -146,6 +155,15 @@ export class CallSession {
   // Lifecycle flags / timers
   private cancelled = false;
   private ttsStopRequested = false;
+  /**
+   * Monotonic counter incremented on every speak invocation. Each in-flight
+   * `streamTtsToTwilio()` captures the value at entry and aborts immediately
+   * if it observes a newer epoch — prevents an older speak loop (still
+   * awaiting one of its parallel TTS promises) from emitting stale audio
+   * frames or running stale post-speech transitions after barge-in starts a
+   * new turn that resets `ttsStopRequested`.
+   */
+  private ttsEpoch = 0;
   private postBotTimer: NodeJS.Timeout | null = null;
   private listenWatchdog: NodeJS.Timeout | null = null;
   private healthGateFired = false;
@@ -206,6 +224,26 @@ export class CallSession {
   /** Inbound μ-law frame from Twilio. Drop unless we're actively listening. */
   onMedia(payload: Buffer): void {
     if (this.cancelled) return;
+
+    // Barge-in: while the bot is speaking, watch for sustained speech that
+    // indicates the user wants to interrupt. Quiet frames reset the onset
+    // (must be sustained, not a single noise blip).
+    if (this.state === "BOT_SPEAKING") {
+      if (BARGE_IN_MIN_MS <= 0) return;
+      const pcm8 = this.provider.decodeInboundFrame(payload);
+      const rms = rmsPcm16(pcm8);
+      const nowMono = performance.now();
+      if (rms >= SPEECH_RMS_THRESHOLD) {
+        if (this.bargeInFirstAtMs === null) this.bargeInFirstAtMs = nowMono;
+        if (nowMono - this.bargeInFirstAtMs >= BARGE_IN_MIN_MS) {
+          this.handleBargeIn(pcm8, rms, nowMono);
+        }
+      } else if (rms < SILENCE_RMS_THRESHOLD) {
+        this.bargeInFirstAtMs = null;
+      }
+      return;
+    }
+
     if (this.state !== "LISTENING" && this.state !== "USER_SPEECH_DETECTED") return;
 
     const pcm8 = this.provider.decodeInboundFrame(payload);
@@ -292,8 +330,53 @@ export class CallSession {
     this.rmsValues = [];
     this.speechFirstAtMs = null;
     this.speechLastAtMs = null;
+    this.bargeInFirstAtMs = null;
     this.healthGateFired = false;
     this.flushStartMs = null;
+  }
+
+  /**
+   * The user spoke for ≥ BARGE_IN_MIN_MS while the bot was talking. Cancel
+   * the in-flight TTS, flush whatever audio the carrier has buffered, and
+   * jump straight into a normal listening turn — seeded with the speech
+   * frame that triggered the barge-in so we don't lose the leading audio.
+   */
+  private handleBargeIn(pcm8: Buffer, rms: number, nowMono: number): void {
+    if (this.cancelled) return;
+    logger.info(
+      {
+        call_id: this.session.callSid,
+        turn_id: this.turnId,
+        rms,
+        ts: Math.round(nowMono),
+      },
+      "call_session_barge_in",
+    );
+    // Stop the TTS pacing loop on its next tick AND bump the epoch so any
+    // in-flight pipelined TTS still awaiting `generateSpeech` resolves into
+    // a stale-epoch check and exits without sending frames or mutating state.
+    this.ttsStopRequested = true;
+    this.ttsEpoch++;
+    // Tell the carrier to drop any audio it has buffered for playback.
+    try { this.session.clear(); } catch { /* provider may not support */ }
+    this.botSpeakingEndMs = nowMono;
+    this.bargeInFirstAtMs = null;
+
+    // Seed the listening turn with the speech that triggered barge-in so
+    // the user's first words make it to STT.
+    this.pcmFrames.push(pcm8);
+    this.rmsValues.push(rms);
+    this.speechFirstAtMs = nowMono;
+    this.speechLastAtMs = nowMono;
+
+    this.transition("LISTENING");
+    this.listeningStartMs = nowMono;
+    this.transition("USER_SPEECH_DETECTED");
+    if (this.listenWatchdog) clearTimeout(this.listenWatchdog);
+    this.listenWatchdog = setTimeout(
+      () => void this.handleListenWatchdog(),
+      MAX_LISTEN_MS,
+    );
   }
 
   private startListening(): void {
@@ -569,10 +652,17 @@ export class CallSession {
 
   private async speakAndAdvance(text: string, _isOpening: boolean): Promise<void> {
     if (this.cancelled) return;
+    const myEpoch = ++this.ttsEpoch;
+    this.ttsStopRequested = false;
+    this.bargeInFirstAtMs = null;
     this.transition("BOT_SPEAKING");
     this.botSpeakingStartMs = performance.now();
-    await this.streamTtsToTwilio(text);
-    if (this.cancelled) return;
+    await this.streamTtsToTwilio(text, myEpoch);
+    // If a newer speak invocation has started (barge-in → next turn) while we
+    // were awaiting our pipelined TTS promises, bail without touching state
+    // or arming a watchdog — the new speak owns the session now.
+    if (this.cancelled || this.ttsEpoch !== myEpoch) return;
+    if (this.state !== "BOT_SPEAKING") return;
     this.botSpeakingEndMs = performance.now();
 
     this.transition("WAIT_AFTER_BOT_SPEECH");
@@ -584,9 +674,13 @@ export class CallSession {
 
   private async speakAndEnd(text: string, reason: string): Promise<void> {
     if (this.cancelled) return;
+    const myEpoch = ++this.ttsEpoch;
+    this.ttsStopRequested = false;
+    this.bargeInFirstAtMs = null;
     this.transition("BOT_SPEAKING");
     this.botSpeakingStartMs = performance.now();
-    await this.streamTtsToTwilio(text);
+    await this.streamTtsToTwilio(text, myEpoch);
+    if (this.cancelled || this.ttsEpoch !== myEpoch) return;
     this.botSpeakingEndMs = performance.now();
     logger.info(
       { call_id: this.session.callSid, reason, turn_id: this.turnId },
@@ -595,41 +689,82 @@ export class CallSession {
     this.endCall(reason);
   }
 
-  private async streamTtsToTwilio(text: string): Promise<void> {
-    const wav = await generateSpeech(text, agentConfig);
-    if (!wav || wav.length <= 44) {
-      logger.warn(
-        { call_id: this.session.callSid, textPreview: text.slice(0, 60) },
-        "call_session_tts_empty",
-      );
-      return;
-    }
-    // Locate the PCM payload via a chunk-aware RIFF/WAVE walk rather than a
-    // fixed 44-byte offset — Sarvam currently returns canonical WAV but a
-    // future change adding a `LIST`/`INFO`/`fact` chunk before `data` would
-    // silently corrupt every TTS playback if we hardcoded the offset.
-    const pcm = extractWavPcm(wav) ?? wav.subarray(44);
+  /**
+   * Pipeline TTS synthesis and playback at the sentence level so the user
+   * hears the first sentence within ~one TTS round-trip instead of waiting
+   * for the whole reply to synthesize.
+   *
+   * Sarvam HTTP TTS does not chunked-stream the response body (it returns
+   * full WAV as base64 in JSON), so true byte-level streaming isn't
+   * available. Sentence chunking is the realistic equivalent: the first
+   * chunk's TTS cost dominates time-to-first-audio, and remaining chunks
+   * synthesize in parallel during playback of earlier ones.
+   */
+  private async streamTtsToTwilio(text: string, epoch: number): Promise<void> {
+    const startedAtAll = performance.now();
+    const chunks = splitForTTS(text);
+    if (chunks.length === 0) return;
 
-    // Phase 4: chunk PCM (not μ-law) at the provider's per-frame size, encode
-    // via the provider, and pace at real-time. CallSession no longer knows
-    // anything about μ-law — that's the Twilio adapter's responsibility.
-    const frameBytesPcm = this.provider.outboundFrameBytesPcm();
-    const frameIntervalMs = this.provider.outboundFrameIntervalMs();
-    const totalFrames = Math.ceil(pcm.length / frameBytesPcm);
-    let sent = 0;
-    const startedAt = performance.now();
-    while (sent < totalFrames) {
-      if (this.cancelled || this.ttsStopRequested) return;
-      const offset = sent * frameBytesPcm;
-      const pcmSlice = pcm.subarray(offset, Math.min(offset + frameBytesPcm, pcm.length));
-      const wireSlice = this.provider.encodeOutboundFrame(pcmSlice);
-      this.session.sendAudio(wireSlice);
-      sent++;
-      const targetMs = sent * frameIntervalMs;
-      const elapsedMs = performance.now() - startedAt;
-      const drift = targetMs - elapsedMs;
-      if (drift > 1) {
-        await new Promise<void>((r) => setTimeout(r, drift));
+    // Kick off all TTS requests concurrently. They resolve out of order, but
+    // we play them strictly in order via the awaited iteration below.
+    const ttsPromises = chunks.map((c) => generateSpeech(c, agentConfig));
+
+    let firstFrameLogged = false;
+    // Stale-epoch check: any in-flight call from a superseded turn must not
+    // emit frames, even if the original `ttsStopRequested` was reset by a
+    // newer `speakAndAdvance()` invocation.
+    const isStale = (): boolean =>
+      this.cancelled || this.ttsStopRequested || this.ttsEpoch !== epoch;
+
+    for (let i = 0; i < ttsPromises.length; i++) {
+      if (isStale()) return;
+      const wav = await ttsPromises[i];
+      if (isStale()) return;
+      if (!wav || wav.length <= 44) {
+        logger.warn(
+          {
+            call_id: this.session.callSid,
+            chunkIndex: i,
+            textPreview: chunks[i].slice(0, 60),
+          },
+          "call_session_tts_empty",
+        );
+        continue;
+      }
+
+      const pcm = extractWavPcm(wav) ?? wav.subarray(44);
+      const frameBytesPcm = this.provider.outboundFrameBytesPcm();
+      const frameIntervalMs = this.provider.outboundFrameIntervalMs();
+      const totalFrames = Math.ceil(pcm.length / frameBytesPcm);
+      const startedAtChunk = performance.now();
+
+      for (let sent = 0; sent < totalFrames; sent++) {
+        if (isStale()) return;
+        const offset = sent * frameBytesPcm;
+        const pcmSlice = pcm.subarray(offset, Math.min(offset + frameBytesPcm, pcm.length));
+        const wireSlice = this.provider.encodeOutboundFrame(pcmSlice);
+        this.session.sendAudio(wireSlice);
+
+        if (!firstFrameLogged) {
+          firstFrameLogged = true;
+          logger.info(
+            {
+              call_id: this.session.callSid,
+              turn_id: this.turnId,
+              ttfa_ms: Math.round(performance.now() - startedAtAll),
+              chunks: chunks.length,
+              first_chunk_chars: chunks[0].length,
+            },
+            "call_session_tts_first_frame",
+          );
+        }
+
+        const targetMs = (sent + 1) * frameIntervalMs;
+        const elapsedMs = performance.now() - startedAtChunk;
+        const drift = targetMs - elapsedMs;
+        if (drift > 1) {
+          await new Promise<void>((r) => setTimeout(r, drift));
+        }
       }
     }
   }

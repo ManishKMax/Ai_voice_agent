@@ -30,8 +30,15 @@ const CHAT_MODEL_ANALYSIS = process.env.SARVAM_ANALYSIS_MODEL ?? "sarvam-30b";
 //                Lower than 256 silently fails on long system prompts.
 //   sarvam-m / sarvam-105b: thinking models — 1500 leaves room to think AND
 //                answer. <think> block alone eats 200-500 tokens.
+// sarvam-m always emits a <think>...</think> block before the actual reply.
+// In practice the thinking phase alone consumed ~1500 tokens on multi-turn
+// Hindi-mixed contexts (observed `empty_length_raw6472` with finish_reason
+// "length"). Bump the budget so the model has headroom to close </think>
+// AND emit a usable reply. We additionally disable thinking via
+// `chat_template_kwargs` below — but keep the larger budget as a safety net
+// for prompts where thinking remains enabled.
 const CHAT_MAX_TOKENS_CONVERSATION =
-  CHAT_MODEL_CONVERSATION === "sarvam-30b" ? 384 : 1500;
+  CHAT_MODEL_CONVERSATION === "sarvam-30b" ? 384 : 2500;
 // Cap how many prior turns we send to the LLM. Sarvam-30b latency grows
 // roughly linearly with prompt length, so a 10-turn call would ship ~3x
 // slower than turn 1 if we replayed everything. The system prompt is always
@@ -315,6 +322,14 @@ async function callSarvamChat(
         temperature: 0.3,
         presence_penalty: 0.6,
         max_tokens: maxTokens,
+        // Disable the model's <think>...</think> phase. Both sarvam-m and
+        // sarvam-30b have been observed burning their entire token budget
+        // inside the thinking block on multi-turn Hindi-mixed contexts and
+        // returning an empty post-think reply (`empty_length_raw####`).
+        // Sarvam's chat API forwards `chat_template_kwargs` to the
+        // underlying Qwen-style template; if the template ignores it, no
+        // harm done — the larger token budget still recovers.
+        chat_template_kwargs: { enable_thinking: false },
       }),
       signal: ac.signal,
     });

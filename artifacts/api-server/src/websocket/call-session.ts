@@ -104,6 +104,12 @@ const MAX_LISTEN_MS          = envInt("VOICE_MAX_LISTEN_MS",          8000, 2000
 // Barge-in: minimum sustained speech duration (ms) during BOT_SPEAKING that
 // counts as the user interrupting. Set <=0 to disable barge-in.
 const BARGE_IN_MIN_MS        = envInt("VOICE_BARGE_IN_MIN_MS",         200,   0, 5000);
+// Barge-in grace: ignore inbound speech for this long *after the bot's first
+// audio frame is actually sent*. Without this, the user's "Hello?" on pickup
+// (which arrives during the 1–16s gap between BOT_SPEAKING state entry and
+// TTS being ready) trips barge-in and kills the greeting before the user
+// has heard a single word from the agent.
+const BARGE_IN_GRACE_MS      = envInt("VOICE_BARGE_IN_GRACE_MS",       800,   0, 10000);
 
 interface PerTurnLog {
   call_id: string;
@@ -152,6 +158,11 @@ export class CallSession {
   // BOT_SPEAKING. Reset whenever we see a quiet frame so noise blips don't
   // accumulate into a false interruption.
   private bargeInFirstAtMs: number | null = null;
+  // Monotonic time at which the first outbound TTS frame was actually sent
+  // for the current speak invocation. Used to gate barge-in detection — we
+  // can't legitimately call it "the user interrupted" until the user has
+  // had a chance to hear the bot's voice for at least BARGE_IN_GRACE_MS.
+  private botFirstFrameSentAtMs: number | null = null;
 
   // Monotonic timestamps for the current turn.
   private botSpeakingStartMs: number | null = null;
@@ -237,6 +248,16 @@ export class CallSession {
     // (must be sustained, not a single noise blip).
     if (this.state === "BOT_SPEAKING") {
       if (BARGE_IN_MIN_MS <= 0) return;
+      // Don't consider barge-in until the bot has actually been audible
+      // for BARGE_IN_GRACE_MS. Without this, the user's "Hello?" on pickup
+      // (arriving in the 1–16s gap before TTS finishes synthesizing) trips
+      // barge-in and kills the greeting before it ever plays.
+      if (
+        this.botFirstFrameSentAtMs === null ||
+        performance.now() - this.botFirstFrameSentAtMs < BARGE_IN_GRACE_MS
+      ) {
+        return;
+      }
       const pcm8 = this.provider.decodeInboundFrame(payload);
       const rms = rmsPcm16(pcm8);
       const nowMono = performance.now();
@@ -679,6 +700,7 @@ export class CallSession {
     const myEpoch = ++this.ttsEpoch;
     this.ttsStopRequested = false;
     this.bargeInFirstAtMs = null;
+    this.botFirstFrameSentAtMs = null;
     this.transition("BOT_SPEAKING");
     this.botSpeakingStartMs = performance.now();
     await this.streamTtsToTwilio(text, myEpoch);
@@ -701,6 +723,7 @@ export class CallSession {
     const myEpoch = ++this.ttsEpoch;
     this.ttsStopRequested = false;
     this.bargeInFirstAtMs = null;
+    this.botFirstFrameSentAtMs = null;
     this.transition("BOT_SPEAKING");
     this.botSpeakingStartMs = performance.now();
     await this.streamTtsToTwilio(text, myEpoch);
@@ -798,6 +821,10 @@ export class CallSession {
 
         if (!firstFrameLogged) {
           firstFrameLogged = true;
+          // Mark when audio actually started flowing — barge-in detection
+          // gates on this so the user's "Hello?" on pickup doesn't kill
+          // the greeting before they've heard anything.
+          this.botFirstFrameSentAtMs = performance.now();
           logger.info(
             {
               call_id: this.session.callSid,

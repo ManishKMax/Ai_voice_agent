@@ -3,6 +3,7 @@ import { authMiddleware } from "../../middlewares/auth.js";
 import { twilioValidate } from "../../middlewares/twilio-validate.js";
 import {
   voiceWebhook,
+  voiceWebhookV2,
   voiceGatherWebhook,
   voiceRespondWebhook,
   serveAudio,
@@ -17,6 +18,8 @@ const router = Router();
 
 // Twilio webhooks — signature-validated, no user auth
 router.post("/voice", twilioValidate, voiceWebhook);
+// Phase 1: opt-in v2 entry that routes audio through our WebSocket pipeline.
+router.post("/voice/v2", twilioValidate, voiceWebhookV2);
 router.post("/voice/gather", twilioValidate, voiceGatherWebhook);
 router.post("/voice/respond", twilioValidate, voiceRespondWebhook);
 router.post("/call-status", twilioValidate, callStatusWebhook);

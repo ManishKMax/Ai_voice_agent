@@ -19,6 +19,7 @@ import magicLinkAuthRouter from "../modules/magic-link/magic-link.routes.js";
 import subscriptionsRouter from "../modules/subscriptions/subscriptions.routes.js";
 import razorpayRouter from "../modules/razorpay/razorpay.routes.js";
 import reportsRouter from "../modules/reports/reports.routes.js";
+import debugRouter from "../modules/debug/debug.routes.js";
 
 const router: IRouter = Router();
 
@@ -42,5 +43,6 @@ router.use("/auth", magicLinkAuthRouter);         // GET  /auth/magic-login
 router.use(subscriptionsRouter);
 router.use(razorpayRouter);
 router.use(reportsRouter);
+router.use("/debug", debugRouter);
 
 export default router;

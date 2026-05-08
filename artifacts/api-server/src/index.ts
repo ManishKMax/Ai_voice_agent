@@ -6,6 +6,7 @@ import { triggerCallForLead } from "./modules/calls/calls.service.js";
 import { resetStuckCallingLeads } from "./modules/leads/leads.service.js";
 import { loadAgentConfig } from "./config/agent.config.js";
 import { loadPlatformSettings } from "./config/platform.config.js";
+import { attachMediaStreamServer } from "./websocket/media-stream.js";
 
 const rawPort = process.env["PORT"];
 if (!rawPort) {
@@ -24,6 +25,10 @@ registerProcessor(async (leadId: number) => {
 });
 
 const httpServer = http.createServer(app);
+
+// Phase 1: Twilio Media Streams WebSocket server, mounted on the same HTTP
+// listener so it works behind Replit's path-based proxy. Endpoint: /api/voice/stream
+attachMediaStreamServer(httpServer);
 
 httpServer.listen(port, async () => {
   logger.info({ port }, "Server listening");

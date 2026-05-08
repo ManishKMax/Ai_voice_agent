@@ -7,6 +7,7 @@ import {
   generateRespondTwiML,
   generateEndCallTwiML,
   generateSayTwiML,
+  generateMediaStreamTwiML,
 } from "../../services/twilio.service.js";
 import { generateSpeech, generateConversationResponse, analyzeTranscript } from "../../services/sarvam.service.js";
 import { storeAudio, getAudio, consumePendingGreeting } from "../../services/audio-cache.js";
@@ -238,6 +239,18 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
     logger.error({ err, leadId }, "Voice webhook error");
     xmlResponse(res, `<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
   }
+}
+
+// ── Voice v2 Webhook (Media Streams — Phase 1, opt-in) ─────────────────────
+//
+// Returns TwiML that connects the call's audio to our /api/voice/stream
+// WebSocket so we can run our own STT/VAD/LLM pipeline. Phase 1 only stands
+// up the plumbing — Phase 2+ will wire Sarvam STT/TTS bridges on top.
+
+export function voiceWebhookV2(req: Request, res: Response): void {
+  const leadId = parseInt((req.query["leadId"] as string) ?? "0");
+  req.log.info({ leadId }, "Voice v2 webhook — connecting to media stream");
+  xmlResponse(res, generateMediaStreamTwiML(leadId || undefined));
 }
 
 // ── Gather Webhook (handles lead's spoken response) ─────────────────────────

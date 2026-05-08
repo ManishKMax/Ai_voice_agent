@@ -146,6 +146,27 @@ export function generateEndCallTwiML(audioId: string): string {
 </Response>`;
 }
 
+/**
+ * Phase 1 (voice/brain v2): TwiML that connects the inbound call to our
+ * Media Streams WebSocket. This route is opt-in (POST /api/voice/v2) and does
+ * NOT touch the existing Gather pipeline, which keeps serving production
+ * traffic. The optional `leadId` is forwarded as a custom <Parameter/> so the
+ * downstream WS subscriber can correlate the audio stream to the lead.
+ */
+export function generateMediaStreamTwiML(leadId?: number): string {
+  const wsBase = config.baseUrl.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:");
+  const streamUrl = `${wsBase}/api/voice/stream`;
+  const leadParam = leadId
+    ? `<Parameter name="leadId" value="${leadId}"/>`
+    : "";
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="${streamUrl}">${leadParam}</Stream>
+  </Connect>
+</Response>`;
+}
+
 export function generateVoicemailTwiML(): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>

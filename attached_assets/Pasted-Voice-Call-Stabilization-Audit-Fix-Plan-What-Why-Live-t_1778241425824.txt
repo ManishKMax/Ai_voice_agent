@@ -1,0 +1,62 @@
+Voice Call Stabilization — Audit & Fix Plan
+What & Why
+Live test call CA d8d4… (lead 42, 10:26) revealed that the AI never answers — every user turn produces only the canned filler "Sorry, ek second — kya aap dohra sakte hain?". Audit of the latest log against the Sarvam + Twilio integration plans (Phase 1–4 + voice-latency-fix) maps every observed symptom to a specific code line. This task lists every fault, ranked by blast radius, so we can agree on the fix scope before touching code.
+Findings (audited line-by-line against logs)
+🔴 BLOCKER — Sarvam chat returns HTTP 400 on every turn
+Evidence (log lines 260, 345):
+ERROR Sarvam chat request failed  model: "sarvam-m", status: 400  err: "max_tokens (2500) exceeds the maximum allowed for sarvam-m for your       subscription tier (starter): 2048. Please reduce max_tokens or upgrade your plan."
+Root cause: services/sarvam.service.ts:41
+const CHAT_MAX_TOKENS_CONVERSATION =  CHAT_MODEL_CONVERSATION === "sarvam-30b" ? 384 : 2500;  // ← 2500 > starter cap 2048
+My previous "fix" (commit 67d87c3) bumped 1500 → 2500 to give the <think> block room. The Sarvam starter tier hard-caps sarvam-m at 2048 tokens, so the request 400s before any reply is generated.
+Cascade:
+callSarvamChat() returns { text: "" } with failureReason: "http_400".
+generateConversationResponse() (line 270) sees the model is already sarvam-m, skips the fallback (which would also be sarvam-m), and returns the soft filler.
+Every single user turn → bot only says "Sorry, ek second — kya aap dohra sakte hain?".
+This single line breaks the entire conversation. The barge-in fix and TTS resampling fix (commits 67d87c3 / 8bb2821) are confirmed working in the same log — TTFA is 1.1–4.9 s and the greeting plays cleanly.
+🟠 SECONDARY — STT WebSocket timeout fires on some turns
+Evidence (log line 421): sarvam_ws_errors: "sarvam_stt_ws_timeout: no response within 15s"
+Root cause: services/sarvam-stt-ws.client.ts:131-133
+this.respTimer = setTimeout(() => {  this.fail(new Error("sarvam_stt_ws_timeout: no response within 15s"));}, RESPONSE_TIMEOUT_MS);  // ← actually 6000 ms, not 15 s
+Two problems:
+The error message string is stale — says "15s" but the timer is 6 s (line 51). Misleading when debugging.
+6 s may be too tight for Sarvam to process an 8 s WAV (MAX_LISTEN_MS = 8000). The first turn in the same call succeeded (transcript "I am feeling amazing"); turn 2 timed out. Sarvam STT WS latency is variable and the ceiling is set below the upstream audio length — that is structurally guaranteed to time out on long utterances.
+🟡 STALE — Code comments contradict current behavior
+services/sarvam.service.ts:9-19, 24-39, 282
+Header comments still describe sarvam-30b as primary with a 384-token budget; reality is sarvam-m with 2500 (now to be 2000) since commit 745cfc8.
+Line 282: the "fallback" (callSarvamChat("sarvam-m", ..., 1500)) is dead code — primary is also sarvam-m, and line 270 short-circuits before ever reaching it.
+The chat_template_kwargs: { enable_thinking: false } flag (line 332) is unverified against Sarvam — we don't know if the API honors it. If yes, we can drop max_tokens from 2000 → ~512. If no, we need the 2000 cushion for <think> block + reply.
+🟢 NON-ISSUE — confirmed working in this log
+✅ TTS 22.05 kHz → 8 kHz resampling (commit 8bb2821).
+✅ BARGE_IN_GRACE_MS=800ms gate (commit 67d87c3) — greeting plays in full, no false barge-in.
+✅ Inbound μ-law decode + RMS-based VAD — I am feeling amazing was transcribed cleanly.
+✅ Twilio Media Streams envelope parsing — start/media/stop all handled.
+Done looks like
+All three findings above are either fixed or explicitly accepted with a note in replit.md.
+A live call to lead 42 has at least 3 successful conversational turns (greeting + 2 user replies + 2 AI replies), with no Sarvam chat request failed and no sarvam_stt_ws_timeout for utterances ≤ 8 s.
+Per-turn structured log shows real LLM content reaching TTS, not the filler.
+Stale comments in sarvam.service.ts accurately describe current model + budget choices.
+Out of scope
+Upgrading the Sarvam plan (starter → higher tier).
+Replacing Sarvam STT WS with HTTP STT (the WS path already works for utterances that don't time out).
+Switching primary chat model away from sarvam-m (no other Sarvam model is fast enough for live voice).
+Barge-in (deferred per Phase 3 plan).
+Exotel provider (Phase 4 scaffold remains as-is).
+Steps
+Lower sarvam-m max_tokens to ≤ 2048 (proposed: 2000) — Single-line change at sarvam.service.ts:41. Within starter tier limit, leaves headroom for <think> block + reply. Removes the HTTP 400 cascade.
+Probe whether chat_template_kwargs.enable_thinking: false is honored — Add a one-shot debug log of the raw response on the next call. If <think> is absent, we can later drop max_tokens to ~512 for faster TTFA. Read-only investigation, no behavior change yet.
+Decide STT timeout policy — Either (a) raise RESPONSE_TIMEOUT_MS from 6 s → 12 s to comfortably exceed the 8 s MAX_LISTEN_MS audio duration, OR (b) keep 6 s and shorten MAX_LISTEN_MS to 5 s. Option (a) is safer; option (b) cuts user think-time. Also fix the misleading "15s" string in the error message either way.
+Clean stale comments + dead fallback — Rewrite the header comment block in sarvam.service.ts to reflect current reality (sarvam-m primary, 2000 tokens, no fallback). Remove the dead callSarvamChat("sarvam-m", ..., 1500) branch on line 282 since primary == fallback.
+Live verification call to lead 42 — Place a real outbound call. Acceptance: greeting plays, user says something, AI replies with real content, repeat 2 more turns. Capture the log, confirm zero HTTP 400s and zero sarvam_stt_ws_timeout for short utterances.
+Update replit.md — Document the Sarvam starter-tier 2048 cap so this isn't re-introduced; document the chosen STT timeout value and reasoning.
+Open questions for you
+Q1 (step 1): Confirm 2000 is acceptable, or do you want to upgrade the Sarvam plan instead so we can use a larger budget?
+Q2 (step 3): Do you prefer option (a) raise STT timeout to 12 s (safer, no user-visible change) or option (b) shorten MAX_LISTEN_MS to 5 s (cuts user think-time but keeps STT tight)?
+Q3 (step 5): OK to test on lead 42 (+919078802278), or use a different verified Twilio destination?
+Relevant files
+artifacts/api-server/src/services/sarvam.service.ts:9-46,259-292,298-383
+artifacts/api-server/src/services/sarvam-stt-ws.client.ts:39-51,119-134
+artifacts/api-server/src/websocket/call-session.ts:103-112,252-260,750-830
+artifacts/api-server/src/voice/ivr/twilio-provider.ts
+artifacts/api-server/src/audio/codec.ts
+/tmp/logs/artifactsapi-server_API_Server_20260508_105143_509.log
+ 

@@ -423,6 +423,24 @@ async function main(): Promise<void> {
     `chain=${transitions.map((t) => t.to).join(",")}`,
   );
 
+  // (d2) Pre-STT flush transitions — guarantees that flushAndProcess()
+  // ran and PCM was actually handed off to the Sarvam STT client. This
+  // asserts the part of the pipeline that runs *before* the network
+  // round-trip, so it's meaningful even without SARVAM_API_KEY.
+  await waitFor(
+    () => transitions.some((t) => t.to === "WAIT_FOR_FINAL_TRANSCRIPT"),
+    5000,
+    "WAIT_FOR_FINAL_TRANSCRIPT",
+  );
+  const sawFlush = seenStates.has("FLUSH_STT") || transitions.some((t) => t.to === "FLUSH_STT");
+  const sawWaitFinal = transitions.some((t) => t.to === "WAIT_FOR_FINAL_TRANSCRIPT");
+  record(
+    "d2",
+    "Live CallSession invoked flushAndProcess (FLUSH_STT → WAIT_FOR_FINAL_TRANSCRIPT)",
+    sawFlush && sawWaitFinal,
+    `flush=${sawFlush} wait_final=${sawWaitFinal}`,
+  );
+
   // (f) Audio-health gate must NOT have fired on healthy audio.
   record(
     "f",

@@ -89,21 +89,9 @@ export function splitForTTS(text: string, maxChars = 200): string[] {
   for (const p of parts) {
     if (p.length > maxChars) {
       if (buf) { out.push(buf); buf = ""; }
-      // Split a runaway piece at clause boundaries first.
-      const sub = p.match(/[^,;]+[,;]?\s*/g) ?? [p];
-      let inner = "";
-      for (const s of sub) {
-        if ((inner + s).length > maxChars && inner) {
-          out.push(inner.trim());
-          inner = s;
-        } else {
-          inner += s;
-        }
-      }
-      // Any clause-fragment still longer than maxChars (e.g. an unpunctuated
-      // wall of text) is hard-cut at maxChars boundaries, preferring the
-      // last whitespace inside the window so we don't slice mid-word. This
-      // is the true safety net — without it, oversized chunks reach
+      // Hard-cut a string at maxChars boundaries, preferring the last
+      // whitespace inside the window so we don't slice mid-word. This is
+      // the true safety net — without it, oversized chunks reach
       // generateSpeech() and get silently truncated to 480 chars, dropping
       // the tail of the reply.
       const flush = (s: string): void => {
@@ -117,6 +105,20 @@ export function splitForTTS(text: string, maxChars = 200): string[] {
         }
         if (rest) out.push(rest);
       };
+      // Split a runaway piece at clause boundaries first, then route every
+      // emission through `flush()` so a single oversized clause (or an
+      // accumulated `inner` that grew past maxChars before the next break)
+      // still gets hard-cut to bounded chunks.
+      const sub = p.match(/[^,;]+[,;]?\s*/g) ?? [p];
+      let inner = "";
+      for (const s of sub) {
+        if ((inner + s).length > maxChars && inner) {
+          flush(inner);
+          inner = s;
+        } else {
+          inner += s;
+        }
+      }
       if (inner.trim()) flush(inner);
       continue;
     }

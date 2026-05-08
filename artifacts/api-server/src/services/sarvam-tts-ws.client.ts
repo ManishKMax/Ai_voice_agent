@@ -78,6 +78,7 @@ export class SarvamTtsClient extends EventEmitter {
   private firstByteAt: number | null = null;
   private requestId: string | null = null;
   private done = false;
+  private terminated = false;
   private idleTimer: NodeJS.Timeout | null = null;
   private overallTimer: NodeJS.Timeout | null = null;
 
@@ -103,11 +104,9 @@ export class SarvamTtsClient extends EventEmitter {
     });
     this.ws = ws;
     this.overallTimer = setTimeout(() => {
-      if (!this.done) {
+      if (!this.terminated) {
         logger.warn({ chunks: this.chunks.length }, "sarvam_tts_ws overall timeout");
-        this.emit("error", new Error("sarvam_tts_ws_overall_timeout"));
-        this.cancel();
-        this.finish();
+        this.fail(new Error("sarvam_tts_ws_overall_timeout"));
       }
     }, OVERALL_TIMEOUT_MS);
 
@@ -141,7 +140,7 @@ export class SarvamTtsClient extends EventEmitter {
 
     ws.on("error", (err) => {
       logger.warn({ err: err.message }, "sarvam_tts_ws error");
-      this.emit("error", err);
+      this.fail(err);
     });
 
     ws.on("close", (code, reason) => {
@@ -151,7 +150,8 @@ export class SarvamTtsClient extends EventEmitter {
         { code, reason: reasonStr, chunks: this.chunks.length, firstByteMs: this.firstByteAt },
         "sarvam_tts_ws closed",
       );
-      if (!this.done) this.finish();
+      // Only emit terminal `done` if we haven't already terminated via error.
+      if (!this.terminated) this.finish();
       this.emit("close", code, reasonStr);
     });
   }
@@ -182,8 +182,7 @@ export class SarvamTtsClient extends EventEmitter {
       const msg = (obj.data?.["message"] as string | undefined) ?? "unknown TTS error";
       const err = new Error(`sarvam_tts_ws_error: ${msg}`);
       logger.error({ data: obj.data }, "sarvam_tts_ws server error");
-      this.emit("error", err);
-      this.cancel();
+      this.fail(err);
       return;
     }
     // ignore unknown control frames (e.g. potential future "done" markers)
@@ -213,8 +212,14 @@ export class SarvamTtsClient extends EventEmitter {
     if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
   }
 
+  /**
+   * Terminal: emit a single `done` event. No-op once any terminal event has
+   * been emitted (via either `done` or `error`). Guarantees the consumer sees
+   * exactly one of done/error per session.
+   */
   private finish(): void {
-    if (this.done) return;
+    if (this.terminated) return;
+    this.terminated = true;
     this.done = true;
     this.clearIdleTimer();
     if (this.overallTimer) { clearTimeout(this.overallTimer); this.overallTimer = null; }
@@ -226,6 +231,21 @@ export class SarvamTtsClient extends EventEmitter {
       requestId: this.requestId,
     };
     this.emit("done", result);
+    if (this.ws && this.ws.readyState === this.ws.OPEN) {
+      try { this.ws.close(); } catch { /* ignore */ }
+    }
+  }
+
+  /**
+   * Terminal: emit a single `error` event. No-op once any terminal event has
+   * been emitted. Cancels the underlying socket so no further frames arrive.
+   */
+  private fail(err: Error): void {
+    if (this.terminated) return;
+    this.terminated = true;
+    this.clearIdleTimer();
+    if (this.overallTimer) { clearTimeout(this.overallTimer); this.overallTimer = null; }
+    this.emit("error", err);
     if (this.ws && this.ws.readyState === this.ws.OPEN) {
       try { this.ws.close(); } catch { /* ignore */ }
     }

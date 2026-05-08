@@ -40,6 +40,7 @@ export async function ttsStream(req: Request, res: Response): Promise<void> {
 
   const client = new SarvamTtsClient();
   let headersSent = false;
+  let settled = false; // single terminal-response guard
   let firstByteAtMs: number | null = null;
   let totalBytes = 0;
   let chunkCount = 0;
@@ -76,18 +77,37 @@ export async function ttsStream(req: Request, res: Response): Promise<void> {
     res.write(chunk.mp3);
   });
 
+  // Single terminal handler — `done` or `error` may both fire from the WS
+  // layer in some race orderings (e.g. error → close → finish would emit a
+  // second terminal). The `settled` guard ensures exactly one HTTP response
+  // termination happens regardless of upstream event ordering, eliminating
+  // ERR_HTTP_HEADERS_SENT and write-after-end crashes.
   client.on("error", (err) => {
+    if (settled) return;
+    settled = true;
     req.log.warn({ err: err.message, sarvam_ws_errors: err.message }, "tts_stream error");
     if (!headersSent) {
       res.status(502).json({ error: "Sarvam TTS WS error", detail: err.message });
-    } else {
-      // Already streaming — terminate the body abruptly. The client will see
-      // a truncated MP3, which is the best we can do mid-stream.
-      try { res.end(); } catch { /* ignore */ }
+      return;
     }
+    // Already streaming — emit error trailers then end the body. Client will
+    // see a truncated MP3 with the error reason in trailers.
+    try {
+      res.addTrailers({
+        "X-Tts-First-Byte-Ms": String(firstByteAtMs ?? ""),
+        "X-Tts-Total-Ms": String(Date.now() - startedAt),
+        "X-Tts-Chunks": String(chunkCount),
+        "X-Tts-Bytes": String(totalBytes),
+        "X-Tts-Request-Id": "",
+        "X-Tts-Error": err.message.slice(0, 200),
+      });
+      res.end();
+    } catch { /* ignore writes-after-end */ }
   });
 
   client.on("done", (result) => {
+    if (settled) return;
+    settled = true;
     const totalMs = Date.now() - startedAt;
     req.log.info(
       {
@@ -100,23 +120,22 @@ export async function ttsStream(req: Request, res: Response): Promise<void> {
       "tts_total_ms",
     );
     if (!headersSent) {
-      // Edge case: Sarvam returned no audio. Surface as 502 with stats inline.
       res.status(502).json({
         error: "Sarvam TTS returned no audio",
         stats: { firstByteMs: null, totalMs, chunks: 0, bytes: 0, requestId: result.requestId },
       });
       return;
     }
-    // Surface latency + size as HTTP trailers — must be added before res.end()
-    // and after `Trailer:` was set in ensureHeaders().
-    res.addTrailers({
-      "X-Tts-First-Byte-Ms": String(result.firstByteMs ?? ""),
-      "X-Tts-Total-Ms": String(totalMs),
-      "X-Tts-Chunks": String(result.chunks.length),
-      "X-Tts-Bytes": String(totalBytes),
-      "X-Tts-Request-Id": result.requestId ?? "",
-    });
-    res.end();
+    try {
+      res.addTrailers({
+        "X-Tts-First-Byte-Ms": String(result.firstByteMs ?? ""),
+        "X-Tts-Total-Ms": String(totalMs),
+        "X-Tts-Chunks": String(result.chunks.length),
+        "X-Tts-Bytes": String(totalBytes),
+        "X-Tts-Request-Id": result.requestId ?? "",
+      });
+      res.end();
+    } catch { /* ignore writes-after-end */ }
   });
 
   // If the HTTP client disconnects, cancel the upstream WS so we don't keep
@@ -142,10 +161,10 @@ export async function ttsStream(req: Request, res: Response): Promise<void> {
 
   // Belt-and-suspenders timeout — Sarvam TTS WS should never run > 30s.
   setTimeout(() => {
-    if (!res.writableEnded) {
-      req.log.warn({ chunkCount, totalBytes }, "tts_stream hard timeout");
-      client.cancel();
-      try { res.end(); } catch { /* ignore */ }
-    }
+    if (settled || res.writableEnded) return;
+    settled = true;
+    req.log.warn({ chunkCount, totalBytes }, "tts_stream hard timeout");
+    client.cancel();
+    try { res.end(); } catch { /* ignore */ }
   }, 30_000);
 }

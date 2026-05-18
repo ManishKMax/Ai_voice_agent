@@ -232,6 +232,10 @@ export class CallSession {
    *  through to the runtime agent config when unset. */
   private readonly voiceOverride: string | undefined;
   private readonly languageOverride: string | undefined;
+  /** Task #31 — "production" for real calls, "simulator" when launched by
+   *  the in-browser Call Simulator. Propagated into every call_metrics
+   *  insert so Reports can filter operator test runs out at the DB level. */
+  private readonly sessionSource: "production" | "simulator";
 
   constructor(
     session: MediaStreamSession,
@@ -239,6 +243,7 @@ export class CallSession {
       llmProviderOverride?: import("../services/llm/index.js").LlmProviderId;
       voiceOverride?: string;
       languageOverride?: string;
+      source?: "production" | "simulator";
     } = {},
   ) {
     this.session = session;
@@ -250,6 +255,9 @@ export class CallSession {
     const l = opts.languageOverride ?? session.customParameters["language"];
     this.voiceOverride = typeof v === "string" && v.trim() ? v.trim() : undefined;
     this.languageOverride = typeof l === "string" && l.trim() ? l.trim() : undefined;
+    const srcParam = session.customParameters["source"];
+    this.sessionSource =
+      opts.source ?? (srcParam === "simulator" ? "simulator" : "production");
   }
 
   private effectiveVoice(): string {
@@ -996,6 +1004,7 @@ export class CallSession {
             ttsLatencyMs,
             totalRoundtripMs,
             livekitTransportMs: null,
+            source: this.sessionSource,
           };
           recordTurnMetrics(metricsRow);
           // Task #31: also publish to the per-call simulator bus so the

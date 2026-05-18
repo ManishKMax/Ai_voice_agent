@@ -94,11 +94,16 @@ export const callMetricsTable = pgTable(
     ttsLatencyMs: integer("tts_latency_ms"),
     totalRoundtripMs: integer("total_roundtrip_ms"),
     livekitTransportMs: integer("livekit_transport_ms"),
+    /** Task #31 — row source. "production" for real lead calls, "simulator"
+     *  for in-browser Call Simulator runs. Lets the Reports → Voice Latency
+     *  widget exclude operator test calls directly without joining `calls`. */
+    source: text("source").default("production").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
     index("call_metrics_call_turn_idx").on(t.callId, t.turnId),
     index("call_metrics_created_provider_idx").on(t.createdAt, t.llmProvider),
+    index("call_metrics_source_idx").on(t.source),
   ],
 );
 

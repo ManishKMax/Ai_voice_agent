@@ -42,11 +42,26 @@ interface SimulatorRoomEntry {
   callSid: string;
   roomName: string;
   startedAt: number;
+  /** Set when the agent worker fires its onTeardown callback. The entry is
+   *  intentionally kept around (not deleted) so a follow-up `/end` POST
+   *  from the same operator can still authenticate against `ownerUserId`. */
+  endedAt: number | null;
   /** User id (admin) who initiated this simulator session. Used to gate
    *  /stream and /end against cross-user access (IDOR). */
   ownerUserId: number | null;
 }
 const simulatorRooms = new Map<number, SimulatorRoomEntry>();
+const ROOM_ENTRY_TTL_MS = 30 * 60 * 1000;
+/** Periodically evict ended simulator entries older than the TTL so the
+ *  map doesn't grow unbounded across long-lived process uptime. */
+setInterval(() => {
+  const now = Date.now();
+  for (const [callId, entry] of simulatorRooms) {
+    if (entry.endedAt && now - entry.endedAt > ROOM_ENTRY_TTL_MS) {
+      simulatorRooms.delete(callId);
+    }
+  }
+}, 5 * 60 * 1000).unref();
 
 /** True if the request's caller is allowed to operate on this simulator
  *  call. When we have an in-memory owner record we enforce a strict match;
@@ -85,16 +100,21 @@ export async function startSimulator(
     const {
       leadName: rawName,
       leadPhone: rawPhone,
-      llmProvider: rawProvider,
+      // Spec-canonical field name. We also accept `llmProvider` as a
+      // back-compat alias so older FE builds keep working during rollout.
+      llmProviderOverride: rawProviderOverride,
+      llmProvider: rawProviderLegacy,
       voice: rawVoice,
       language: rawLanguage,
     } = req.body as {
       leadName?: string;
       leadPhone?: string;
+      llmProviderOverride?: string;
       llmProvider?: string;
       voice?: string;
       language?: string;
     };
+    const rawProvider = rawProviderOverride ?? rawProviderLegacy;
 
     const leadName =
       typeof rawName === "string" && rawName.trim()
@@ -183,13 +203,16 @@ export async function startSimulator(
         voice,
         language,
         callSid,
+        source: "simulator",
         // Resilient cleanup: when the agent worker tears down for ANY
         // reason (browser tab closed, network drop, last_participant
-        // disconnect, call_session_closed via [DONE]), evict the room map
-        // and finalise the call row so we don't rely on the browser
-        // managing to fire `/end` before exit.
+        // disconnect, call_session_closed via [DONE]), mark the room
+        // entry as ended (do NOT delete) so a later `/end` POST can
+        // still authenticate against `ownerUserId`. A periodic sweep
+        // evicts entries older than ROOM_ENTRY_TTL_MS.
         onTeardown: (reason) => {
-          simulatorRooms.delete(call.id);
+          const entry = simulatorRooms.get(call.id);
+          if (entry) entry.endedAt = Date.now();
           void db
             .update(callsTable)
             .set({ callStatus: "completed" })
@@ -230,6 +253,7 @@ export async function startSimulator(
       callSid,
       roomName,
       startedAt: Date.now(),
+      endedAt: null,
       ownerUserId,
     });
 
@@ -319,7 +343,9 @@ export async function endSimulator(
           );
         }
       }
-      simulatorRooms.delete(callId);
+      // Keep the entry so any duplicate /end POST (or operator refresh)
+      // can still authenticate; TTL sweeper evicts it 30 min later.
+      entry.endedAt = entry.endedAt ?? Date.now();
     }
     await db
       .update(callsTable)

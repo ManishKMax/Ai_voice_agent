@@ -34,7 +34,8 @@ async function apiFetch(path: string, options?: RequestInit) {
 }
 
 const LLM_PROVIDERS = [
-  { id: "sarvam", label: "Sarvam-M (default)" },
+  { id: "default", label: "Use global default" },
+  { id: "sarvam", label: "Sarvam-M" },
   { id: "groq", label: "Groq Llama-3.3-70B" },
   { id: "openai", label: "OpenAI GPT-4o-mini" },
   { id: "gemini", label: "Gemini 2.0 Flash" },
@@ -151,7 +152,10 @@ function formatMetric(value: unknown, spec: MetricSpec): string {
 export default function SimulatorPage() {
   const [leadName, setLeadName] = useState("Test Lead");
   const [leadPhone, setLeadPhone] = useState("+910000000000");
-  const [llmProvider, setLlmProvider] = useState<string>("sarvam");
+  // Default = "default" → no override sent on /start, server resolves from
+  // agent_settings.llmProviderId. Operator can opt into a specific provider
+  // via the dropdown.
+  const [llmProvider, setLlmProvider] = useState<string>("default");
   const [voice, setVoice] = useState<string>("default");
   const [language, setLanguage] = useState<string>("default");
 
@@ -193,12 +197,17 @@ export default function SimulatorPage() {
   const handleEnd = useCallback(async () => {
     if (!session) return;
     const callId = session.callId;
-    await teardown();
+    // POST /end FIRST so the in-memory ownership entry is still present
+    // when the server authenticates this request. If we tore down the
+    // LiveKit room first, onTeardown would race ahead and (in older
+    // builds) evict ownership before /end was authed. The server response
+    // also carries the final transcript + metrics summary we display.
     try {
       await apiFetch(`/api/simulator/${callId}/end`, { method: "POST" });
     } catch {
       // best-effort
     }
+    await teardown();
     setSession(null);
   }, [session, teardown]);
 
@@ -269,7 +278,10 @@ export default function SimulatorPage() {
         body: JSON.stringify({
           leadName,
           leadPhone,
-          llmProvider: effProvider,
+          // Spec-canonical field name. Omit entirely when operator left the
+          // dropdown on "Use global default" so server resolves from
+          // agent_settings.llmProviderId.
+          llmProviderOverride: effProvider === "default" ? undefined : effProvider,
           // Only send overrides when the operator picked something other
           // than "use platform default" — keeps the payload minimal and
           // lets the server resolve from agent_settings as usual.

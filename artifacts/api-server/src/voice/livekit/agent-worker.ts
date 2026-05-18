@@ -79,6 +79,10 @@ interface StartLiveKitAgentOptions {
   language?: string;
   /** Optional human-friendly call SID for logs. Generated if absent. */
   callSid?: string;
+  /** Task #31 — "simulator" for in-browser Call Simulator runs so
+   *  CallSession can tag its call_metrics rows accordingly. Defaults to
+   *  "production" for all other paths. */
+  source?: "production" | "simulator";
   /** Fired exactly once when this worker tears down for any reason
    *  (explicit disconnect, last participant leave, room close, or a
    *  failure mid-stream). Lets the simulator controller drop its
@@ -223,6 +227,9 @@ async function doStartLiveKitAgent(
   if (opts.language && opts.language.trim()) {
     customParameters["language"] = opts.language.trim();
   }
+  if (opts.source) {
+    customParameters["source"] = opts.source;
+  }
 
   const format: MediaStreamFormat = {
     encoding: "audio/pcm",
@@ -290,6 +297,7 @@ async function doStartLiveKitAgent(
       : undefined,
     voiceOverride: opts.voice?.trim() || undefined,
     languageOverride: opts.language?.trim() || undefined,
+    source: opts.source,
   });
 
   // Track inbound-stream readers so teardown can cancel them. Without

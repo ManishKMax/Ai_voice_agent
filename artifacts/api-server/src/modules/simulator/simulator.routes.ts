@@ -43,5 +43,8 @@ const adminRole = requireRole("SUPER_ADMIN", "COMPANY_ADMIN");
 router.post("/start", authMiddleware, adminRole, startSimulator);
 router.post("/:callId/end", simulatorAuth, adminRole, endSimulator);
 router.get("/:callId/stream", simulatorAuth, adminRole, streamSimulatorEvents);
+// Spec-canonical alias for the SSE endpoint (Task #31 contract uses /logs).
+// Internally identical to /stream — same handler, same auth, same payload.
+router.get("/:callId/logs", simulatorAuth, adminRole, streamSimulatorEvents);
 
 export default router;

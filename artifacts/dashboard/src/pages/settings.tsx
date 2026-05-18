@@ -262,12 +262,35 @@ export default function Settings() {
   const [newKeyValue, setNewKeyValue] = useState<string | null>(null);
   const [deletingKeyId, setDeletingKeyId] = useState<number | null>(null);
 
+  // ── LLM Provider state ────────────────────────────────────────────────
+  type LlmProviderId = "sarvam" | "groq" | "openai" | "gemini";
+  interface LlmProviderRow {
+    id: LlmProviderId;
+    label: string;
+    defaultModel: string;
+    model: string;
+    apiKeyMasked: string;
+    configured: boolean;
+  }
+  const [llmActiveId, setLlmActiveId] = useState<LlmProviderId>("sarvam");
+  const [llmProviders, setLlmProviders] = useState<LlmProviderRow[]>([]);
+  // Edits the user has typed but not saved yet, keyed by provider id.
+  const [llmEdits, setLlmEdits] = useState<Partial<Record<LlmProviderId, { apiKey?: string; model?: string }>>>({});
+  const [llmSaving, setLlmSaving] = useState(false);
+  const [llmTestStatus, setLlmTestStatus] = useState<Record<string, ConnectionStatus>>({});
+  const [llmTestMessage, setLlmTestMessage] = useState<Record<string, string>>({});
+
   useEffect(() => {
     Promise.all([
       apiFetch("/api/settings"),
       apiFetch("/api/settings/webhook-info"),
       apiFetch("/api/settings/api-keys"),
-    ]).then(([settingsRes, webhookRes, keysRes]) => {
+      apiFetch("/api/settings/llm"),
+    ]).then(([settingsRes, webhookRes, keysRes, llmRes]) => {
+      if (llmRes?.success) {
+        setLlmActiveId(llmRes.data.activeProviderId);
+        setLlmProviders(llmRes.data.providers);
+      }
       if (settingsRes.success) {
         const d: SettingsData = settingsRes.data;
         setCurrentStatus({
@@ -440,6 +463,56 @@ export default function Settings() {
     } finally {
       setCreatingKey(false);
     }
+  }
+
+  function setLlmEdit(id: LlmProviderId, field: "apiKey" | "model", value: string) {
+    setLlmEdits((e) => ({ ...e, [id]: { ...(e[id] ?? {}), [field]: value } }));
+  }
+
+  async function handleSaveLlm() {
+    setLlmSaving(true);
+    try {
+      const credentials: Record<string, { apiKey?: string; model?: string }> = {};
+      for (const [id, slot] of Object.entries(llmEdits)) {
+        if (!slot) continue;
+        const entry: { apiKey?: string; model?: string } = {};
+        if (typeof slot.apiKey === "string" && slot.apiKey !== "") entry.apiKey = slot.apiKey;
+        // Always send model (incl. empty) so user can clear back to default.
+        const row = llmProviders.find((p) => p.id === id);
+        if (typeof slot.model === "string" && slot.model !== row?.model) entry.model = slot.model;
+        if (Object.keys(entry).length > 0) credentials[id] = entry;
+      }
+      const res = await apiFetch("/api/settings/llm", {
+        method: "PATCH",
+        body: JSON.stringify({ activeProviderId: llmActiveId, credentials }),
+      });
+      if (res.success) {
+        setLlmActiveId(res.data.activeProviderId);
+        setLlmProviders(res.data.providers);
+        setLlmEdits({});
+        toast({ title: "LLM provider saved", description: `Active: ${res.data.activeProviderId}` });
+      } else {
+        toast({ title: "Save failed", description: res.message ?? "Unknown error", variant: "destructive" });
+      }
+    } finally {
+      setLlmSaving(false);
+    }
+  }
+
+  async function handleTestLlm(providerId: LlmProviderId) {
+    setLlmTestStatus((s) => ({ ...s, [providerId]: "testing" }));
+    setLlmTestMessage((m) => ({ ...m, [providerId]: "" }));
+    const edit = llmEdits[providerId] ?? {};
+    const res = await apiFetch("/api/settings/llm/test", {
+      method: "POST",
+      body: JSON.stringify({
+        providerId,
+        apiKey: edit.apiKey || undefined,
+        model: edit.model || undefined,
+      }),
+    });
+    setLlmTestStatus((s) => ({ ...s, [providerId]: res.success ? "ok" : "error" }));
+    setLlmTestMessage((m) => ({ ...m, [providerId]: res.message ?? "" }));
   }
 
   async function handleDeleteKey(id: number) {
@@ -623,6 +696,109 @@ export default function Settings() {
                 {sarvamMessage}
               </p>
             )}
+          </div>
+        </div>
+      </section>
+
+      {/* LLM Provider Section */}
+      <section className="rounded-xl border border-border bg-card shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-card">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-lg bg-indigo-50 dark:bg-indigo-950 flex items-center justify-center">
+              <Zap className="h-4 w-4 text-indigo-600" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-foreground">LLM Provider</h2>
+              <p className="text-xs text-muted-foreground">Pick the chat brain for live conversations</p>
+            </div>
+          </div>
+          <button
+            onClick={handleSaveLlm}
+            disabled={llmSaving}
+            className="flex items-center gap-2 bg-primary text-primary-foreground px-3 py-1.5 rounded-md text-sm font-medium hover:bg-primary/90 disabled:opacity-60 transition-colors"
+          >
+            {llmSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Save LLM Settings
+          </button>
+        </div>
+
+        <div className="p-6 space-y-6">
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground">Active provider</label>
+            <p className="text-xs text-muted-foreground">
+              Used for every live call's chat turns. Sarvam stays as automatic fallback if the chosen provider returns empty.
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+              {llmProviders.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => setLlmActiveId(p.id)}
+                  className={`px-3 py-2 rounded-md border text-sm font-medium transition-colors ${
+                    llmActiveId === p.id
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "border-border hover:bg-accent"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-5 pt-2">
+            {llmProviders.map((p) => {
+              const edit = llmEdits[p.id] ?? {};
+              const apiKeyValue = edit.apiKey ?? "";
+              const modelValue = edit.model ?? p.model ?? "";
+              const status = llmTestStatus[p.id] ?? "idle";
+              const message = llmTestMessage[p.id] ?? "";
+              return (
+                <div key={p.id} className="rounded-lg border border-border p-4 space-y-3 bg-muted/20">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-foreground">{p.label}</span>
+                      {llmActiveId === p.id && (
+                        <span className="text-[10px] uppercase tracking-wide text-primary border border-primary/40 rounded px-1.5 py-0.5">
+                          Active
+                        </span>
+                      )}
+                    </div>
+                    <StatusBadge status={status} connected={p.configured} />
+                  </div>
+                  <SecretInput
+                    label={`${p.label} API Key${p.configured ? ` (saved: ${p.apiKeyMasked})` : ""}`}
+                    value={apiKeyValue}
+                    onChange={(v) => setLlmEdit(p.id, "apiKey", v)}
+                    placeholder={p.configured ? "Leave blank to keep existing" : "Paste API key…"}
+                  />
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium text-foreground">Model (optional)</label>
+                    <input
+                      type="text"
+                      value={modelValue}
+                      onChange={(e) => setLlmEdit(p.id, "model", e.target.value)}
+                      placeholder={`Default: ${p.defaultModel}`}
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring placeholder:text-muted-foreground"
+                    />
+                  </div>
+                  <div className="flex items-center gap-3 pt-1">
+                    <button
+                      onClick={() => handleTestLlm(p.id)}
+                      disabled={status === "testing"}
+                      className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border text-sm hover:bg-accent disabled:opacity-60 transition-colors"
+                    >
+                      {status === "testing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                      Test {p.label}
+                    </button>
+                    {message && (
+                      <p className={`text-sm ${status === "ok" ? "text-green-600" : "text-red-500"}`}>
+                        {message}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </section>

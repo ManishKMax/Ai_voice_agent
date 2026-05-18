@@ -1,5 +1,9 @@
 import { db } from "@workspace/db";
-import { agentSettingsTable } from "@workspace/db/schema";
+import {
+  agentSettingsTable,
+  type LlmCredentialsMap,
+  type LlmProviderId,
+} from "@workspace/db/schema";
 import { logger } from "../lib/logger.js";
 
 export interface AgentConfig {
@@ -11,6 +15,10 @@ export interface AgentConfig {
   productName: string;
   maxTurns: number;
   customSystemPrompt: string | null;
+  /** Active LLM provider for live conversation. Default "sarvam". */
+  llmProviderId: LlmProviderId;
+  /** Per-provider credentials (apiKey + optional model). */
+  llmCredentials: LlmCredentialsMap;
 }
 
 const TONE_MAP = {
@@ -24,6 +32,13 @@ function parseTone(val?: string | null): AgentConfig["tone"] {
   return "professional";
 }
 
+const VALID_LLM_IDS: ReadonlySet<LlmProviderId> = new Set(["sarvam", "groq", "openai", "gemini"]);
+
+function parseLlmId(val: unknown): LlmProviderId {
+  if (typeof val === "string" && VALID_LLM_IDS.has(val as LlmProviderId)) return val as LlmProviderId;
+  return "sarvam";
+}
+
 function defaultConfig(): AgentConfig {
   return {
     name: process.env.AGENT_NAME ?? "Priya",
@@ -34,6 +49,8 @@ function defaultConfig(): AgentConfig {
     productName: process.env.PRODUCT_NAME ?? "CRM Suite",
     maxTurns: parseInt(process.env.AGENT_MAX_TURNS ?? "6"),
     customSystemPrompt: null,
+    llmProviderId: "sarvam",
+    llmCredentials: {},
   };
 }
 
@@ -58,8 +75,13 @@ export async function loadAgentConfig(): Promise<void> {
         productName: stored.productName ?? agentConfig.productName,
         maxTurns: typeof stored.maxTurns === "number" ? stored.maxTurns : agentConfig.maxTurns,
         customSystemPrompt: stored.customSystemPrompt ?? null,
+        llmProviderId: parseLlmId(stored.llmProviderId),
+        llmCredentials: (stored.llmCredentials ?? {}) as LlmCredentialsMap,
       };
-      logger.info({ name: agentConfig.name, voice: agentConfig.voice }, "Agent config loaded from DB");
+      logger.info(
+        { name: agentConfig.name, voice: agentConfig.voice, llmProviderId: agentConfig.llmProviderId },
+        "Agent config loaded from DB",
+      );
     }
   } catch (err) {
     logger.warn({ err }, "Failed to load agent config from DB — using env defaults");

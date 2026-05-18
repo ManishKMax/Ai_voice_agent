@@ -202,10 +202,21 @@ export class CallSession {
   /** Once-per-call flag for the TTS resampling notice (was per-turn WARN). */
   private ttsResamplingNoticeLogged = false;
 
-  constructor(session: MediaStreamSession) {
+  /**
+   * Per-call LLM provider override (e.g. "openai", "groq"). Resolved from
+   * the start envelope's `customParameters.llmProvider` so the upcoming
+   * in-browser simulator (Task #31) can A/B providers without mutating
+   * agent_settings. Unknown values are ignored by the resolver and fall
+   * through to the configured provider.
+   */
+  private readonly llmProviderOverride: string | undefined;
+
+  constructor(session: MediaStreamSession, opts: { llmProviderOverride?: string } = {}) {
     this.session = session;
     const leadIdRaw = session.customParameters["leadId"];
     this.leadId = leadIdRaw ? parseInt(leadIdRaw, 10) || 0 : 0;
+    this.llmProviderOverride =
+      opts.llmProviderOverride ?? session.customParameters["llmProvider"] ?? undefined;
   }
 
   async start(): Promise<void> {
@@ -748,9 +759,10 @@ export class CallSession {
       return;
     }
 
-    const { text: agentText, shouldEnd, chatMs, chatModel } = await generateConversationResponse(
+    const { text: agentText, shouldEnd, chatMs, chatModel, chatProvider } = await generateConversationResponse(
       sessionState.messages,
       transcript,
+      { llmProviderOverride: this.llmProviderOverride },
     );
     logger.info(
       {
@@ -758,6 +770,7 @@ export class CallSession {
         turn_id: this.turnId,
         chat_ms: chatMs,
         chat_model: chatModel,
+        chat_provider: chatProvider,
         should_end: shouldEnd,
         agent_text_preview: agentText.slice(0, 200),
       },
@@ -1112,7 +1125,9 @@ function makeHandler(): MediaStreamHandler {
   const sessions = new Map<string, CallSession>();
   return {
     onStart(session) {
-      const cs = new CallSession(session);
+      const cs = new CallSession(session, {
+        llmProviderOverride: session.customParameters["llmProvider"],
+      });
       sessions.set(session.streamSid, cs);
       void cs.start();
     },

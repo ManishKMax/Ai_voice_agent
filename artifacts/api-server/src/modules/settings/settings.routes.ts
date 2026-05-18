@@ -13,6 +13,9 @@ import {
   listApiKeys,
   createApiKey,
   deleteApiKey,
+  getLlmSettings,
+  patchLlmSettings,
+  testLlmProvider,
 } from "./settings.controller.js";
 
 const router = Router();
@@ -30,5 +33,9 @@ router.post("/settings/test-low-balance-email", requireAuth, testLowBalanceEmail
 router.get("/settings/api-keys", requireAuth, listApiKeys);
 router.post("/settings/api-keys", requireAuth, createApiKey);
 router.delete("/settings/api-keys/:keyId", requireAuth, deleteApiKey);
+
+router.get("/settings/llm", requireAuth, getLlmSettings);
+router.patch("/settings/llm", requireAuth, patchLlmSettings);
+router.post("/settings/llm/test", requireAuth, testLlmProvider);
 
 export default router;

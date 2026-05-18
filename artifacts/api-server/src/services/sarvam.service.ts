@@ -1,7 +1,9 @@
 import { logger } from "../lib/logger.js";
 import { config } from "../config/index.js";
 import type { AgentConfig } from "../config/agent.config.js";
+import { agentConfig } from "../config/agent.config.js";
 import type { ConversationMessage } from "./conversation-state.js";
+import { resolveLlm, type LlmProviderId } from "./llm/index.js";
 
 const STT_URL = "https://api.sarvam.ai/speech-to-text";
 const TTS_URL = "https://api.sarvam.ai/text-to-speech";
@@ -231,16 +233,29 @@ export interface ChatResult {
   chatMs: number;
   /** Model that produced the returned text (or the last model attempted). */
   chatModel: string;
+  /** LLM provider that produced the returned text. */
+  chatProvider: LlmProviderId;
 }
 
+export interface GenerateConversationOptions {
+  /**
+   * Per-call override that takes precedence over the configured provider.
+   * Used by the in-browser simulator (Task #31) to A/B test providers without
+   * mutating global settings. Unknown ids fall back to the configured provider.
+   */
+  llmProviderOverride?: string;
+}
+
+/**
+ * Orchestrate one conversational turn. Resolves the active LLM provider
+ * (override → agent_settings.llmProviderId → "sarvam"), trims history,
+ * and falls back to Sarvam if the primary provider returns empty.
+ */
 export async function generateConversationResponse(
   messages: ConversationMessage[],
-  userInput: string
+  userInput: string,
+  options: GenerateConversationOptions = {},
 ): Promise<ChatResult> {
-  if (!config.sarvam.apiKey) {
-    return { text: "Thank you for your time. Goodbye!", shouldEnd: true, chatMs: 0, chatModel: "none" };
-  }
-
   // Cap prompt size: keep the system message (always at index 0) plus the
   // last N user/assistant turns. Prevents per-turn LLM latency from growing
   // unboundedly as the conversation goes on.
@@ -248,62 +263,113 @@ export async function generateConversationResponse(
   const tail = messages
     .slice(systemMsg.length)
     .slice(-CHAT_HISTORY_MAX_TURNS * 2); // user+assistant per turn
-  const fullMessages = [
-    ...systemMsg,
-    ...tail,
-    { role: "user" as const, content: userInput },
-  ];
+  const historyMessages = [...systemMsg, ...tail];
 
-  // Single-attempt: sarvam-m is reliable and the only fast-enough model for
-  // live voice. There is no faster fallback — if sarvam-m fails, retrying a
-  // slower model (sarvam-30b 3-28s) would just push the caller past their
-  // patience window. Return a soft filler so the call stays alive and the
-  // user can repeat themselves.
-  const t0 = Date.now();
-  const primary = await callSarvamChat(
-    CHAT_MODEL_CONVERSATION,
-    fullMessages,
-    CHAT_MAX_TOKENS_CONVERSATION,
-  );
-  const primaryMs = Date.now() - t0;
-  if (primary.text) {
-    return { text: primary.text, shouldEnd: primary.shouldEnd, chatMs: primaryMs, chatModel: CHAT_MODEL_CONVERSATION };
-  }
+  const resolved = resolveLlm({
+    override: options.llmProviderOverride,
+    configuredId: agentConfig.llmProviderId,
+    credentials: agentConfig.llmCredentials,
+    sarvamFallbackKey: config.sarvam.apiKey,
+  });
 
-  // If a non-sarvam-m model was forced via env and it returned empty, try
-  // sarvam-m once as a recovery. Otherwise straight to filler.
-  if (CHAT_MODEL_CONVERSATION !== "sarvam-m") {
-    logger.warn(
-      { primaryReason: primary.failureReason, primaryModel: CHAT_MODEL_CONVERSATION },
-      "Primary chat empty — falling back to sarvam-m",
-    );
-    const t1 = Date.now();
-    const fallback = await callSarvamChat("sarvam-m", fullMessages, CHAT_MAX_TOKENS_CONVERSATION);
-    const fallbackMs = Date.now() - t1;
-    if (fallback.text) {
-      return { text: fallback.text, shouldEnd: fallback.shouldEnd, chatMs: primaryMs + fallbackMs, chatModel: "sarvam-m" };
+  // No key for the chosen non-Sarvam provider — fall back to Sarvam
+  // immediately rather than hanging up the call. Only if Sarvam itself has
+  // no key (misconfigured platform) do we end politely.
+  if (!resolved.apiKey) {
+    if (resolved.provider.id !== "sarvam" && config.sarvam.apiKey) {
+      logger.warn(
+        { configuredProvider: resolved.provider.id },
+        "primary_llm_no_key_falling_back_to_sarvam",
+      );
+      const sarvam = resolveLlm({
+        configuredId: "sarvam",
+        credentials: agentConfig.llmCredentials,
+        sarvamFallbackKey: config.sarvam.apiKey,
+      });
+      const fb = await sarvam.provider.chat(
+        { messages: historyMessages, userInput, maxTokens: CHAT_MAX_TOKENS_CONVERSATION, temperature: 0.3 },
+        sarvam.apiKey,
+        sarvam.model,
+      );
+      if (fb.text) {
+        return {
+          text: fb.text,
+          shouldEnd: fb.shouldEnd,
+          chatMs: fb.latencyMs,
+          chatModel: fb.model,
+          chatProvider: fb.providerId,
+        };
+      }
     }
-    logger.warn(
-      { fallbackReason: fallback.failureReason },
-      "sarvam-m fallback also empty — soft retry filler",
-    );
     return {
-      text: "Sorry, ek second — kya aap dohra sakte hain?",
-      shouldEnd: false,
-      chatMs: primaryMs + fallbackMs,
-      chatModel: "sarvam-m",
+      text: "Thank you for your time. Goodbye!",
+      shouldEnd: true,
+      chatMs: 0,
+      chatModel: resolved.provider.defaultModel,
+      chatProvider: resolved.provider.id,
     };
   }
 
+  const primary = await resolved.provider.chat(
+    {
+      messages: historyMessages,
+      userInput,
+      maxTokens: CHAT_MAX_TOKENS_CONVERSATION,
+      temperature: 0.3,
+    },
+    resolved.apiKey,
+    resolved.model,
+  );
+
+  if (primary.text) {
+    return {
+      text: primary.text,
+      shouldEnd: primary.shouldEnd,
+      chatMs: primary.latencyMs,
+      chatModel: primary.model,
+      chatProvider: primary.providerId,
+    };
+  }
+
+  // Cross-provider fallback: if the configured provider returned empty and
+  // it wasn't already Sarvam, try Sarvam once as a safety net. Live voice
+  // can't afford a dead reply.
+  if (resolved.provider.id !== "sarvam" && config.sarvam.apiKey) {
+    logger.warn(
+      { primaryProvider: resolved.provider.id, primaryReason: primary.failureReason },
+      "primary_llm_empty_falling_back_to_sarvam",
+    );
+    const sarvam = resolveLlm({
+      configuredId: "sarvam",
+      credentials: agentConfig.llmCredentials,
+      sarvamFallbackKey: config.sarvam.apiKey,
+    });
+    const fb = await sarvam.provider.chat(
+      { messages: historyMessages, userInput, maxTokens: CHAT_MAX_TOKENS_CONVERSATION, temperature: 0.3 },
+      sarvam.apiKey,
+      sarvam.model,
+    );
+    if (fb.text) {
+      return {
+        text: fb.text,
+        shouldEnd: fb.shouldEnd,
+        chatMs: primary.latencyMs + fb.latencyMs,
+        chatModel: fb.model,
+        chatProvider: fb.providerId,
+      };
+    }
+  }
+
   logger.warn(
-    { primaryReason: primary.failureReason },
-    "sarvam-m returned empty — soft retry filler",
+    { provider: resolved.provider.id, primaryReason: primary.failureReason },
+    "llm_returned_empty_soft_retry_filler",
   );
   return {
     text: "Sorry, ek second — kya aap dohra sakte hain?",
     shouldEnd: false,
-    chatMs: primaryMs,
-    chatModel: CHAT_MODEL_CONVERSATION,
+    chatMs: primary.latencyMs,
+    chatModel: primary.model,
+    chatProvider: primary.providerId,
   };
 }
 

@@ -12,6 +12,24 @@ import {
 } from "../../config/platform.config.js";
 import { hashApiKey } from "../../middlewares/apikey.js";
 import { sendTestEmail, sendLowBalanceEmail } from "../../services/email.service.js";
+import {
+  agentConfig,
+  updateAgentConfig,
+} from "../../config/agent.config.js";
+import {
+  LLM_PROVIDERS,
+  LLM_PROVIDER_ORDER,
+  getLlmProvider,
+  isLlmProviderId,
+  type LlmProviderId,
+} from "../../services/llm/index.js";
+import type { LlmCredentialsMap } from "@workspace/db/schema";
+
+function maskKey(key: string | undefined): string {
+  if (!key) return "";
+  if (key.length <= 8) return "•".repeat(key.length);
+  return `${key.slice(0, 4)}${"•".repeat(Math.max(8, key.length - 8))}${key.slice(-4)}`;
+}
 
 export async function getSettings(req: Request, res: Response, next: NextFunction) {
   try {
@@ -304,6 +322,106 @@ export async function deleteApiKey(req: Request, res: Response, next: NextFuncti
     const id = parseInt(req.params.keyId as string);
     await db.delete(apiKeysTable).where(eq(apiKeysTable.id, id));
     res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── LLM Provider settings ────────────────────────────────────────────────
+
+function buildLlmSettingsView() {
+  const credentials = agentConfig.llmCredentials ?? {};
+  return {
+    activeProviderId: agentConfig.llmProviderId ?? "sarvam",
+    providers: LLM_PROVIDER_ORDER.map((id) => {
+      const p = LLM_PROVIDERS[id];
+      const slot = credentials[id] ?? {};
+      return {
+        id,
+        label: p.label,
+        defaultModel: p.defaultModel,
+        model: slot.model ?? "",
+        apiKeyMasked: maskKey(slot.apiKey),
+        configured: !!slot.apiKey,
+      };
+    }),
+  };
+}
+
+export async function getLlmSettings(_req: Request, res: Response, next: NextFunction) {
+  try {
+    res.json({ success: true, data: buildLlmSettingsView() });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function patchLlmSettings(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { activeProviderId, credentials } = req.body as {
+      activeProviderId?: string;
+      credentials?: Partial<Record<string, { apiKey?: string; model?: string }>>;
+    };
+
+    const patch: { llmProviderId?: LlmProviderId; llmCredentials?: LlmCredentialsMap } = {};
+
+    if (activeProviderId !== undefined) {
+      if (!isLlmProviderId(activeProviderId)) {
+        res.status(400).json({ success: false, message: `Unknown LLM provider: ${activeProviderId}` });
+        return;
+      }
+      patch.llmProviderId = activeProviderId;
+    }
+
+    if (credentials && typeof credentials === "object") {
+      // Merge into existing creds. Empty-string apiKey means "leave existing
+      // value alone" (UI sends "" when the user hasn't touched the field, so
+      // we don't clobber the stored secret on every save). Empty string for
+      // model DOES clear it back to the provider default.
+      const merged: LlmCredentialsMap = { ...(agentConfig.llmCredentials ?? {}) };
+      for (const [id, slot] of Object.entries(credentials)) {
+        if (!isLlmProviderId(id) || !slot || typeof slot !== "object") continue;
+        const existing = merged[id] ?? {};
+        const next = { ...existing };
+        if (typeof slot.apiKey === "string" && slot.apiKey !== "") next.apiKey = slot.apiKey;
+        if (typeof slot.model === "string") next.model = slot.model || undefined;
+        merged[id] = next;
+      }
+      patch.llmCredentials = merged;
+    }
+
+    await updateAgentConfig(patch);
+    res.json({ success: true, data: buildLlmSettingsView() });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function testLlmProvider(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { providerId, apiKey: bodyApiKey, model: bodyModel } = req.body as {
+      providerId?: string;
+      apiKey?: string;
+      model?: string;
+    };
+    if (!isLlmProviderId(providerId)) {
+      res.status(400).json({ success: false, message: `Unknown LLM provider: ${providerId}` });
+      return;
+    }
+    const provider = getLlmProvider(providerId);
+    const stored = agentConfig.llmCredentials?.[providerId] ?? {};
+    const apiKey = bodyApiKey && bodyApiKey !== "" ? bodyApiKey : stored.apiKey;
+    const model = bodyModel || stored.model;
+    if (!apiKey) {
+      res.status(400).json({ success: false, message: `No API key configured for ${provider.label}` });
+      return;
+    }
+    const result = await provider.test(apiKey, model);
+    res.status(result.ok ? 200 : 400).json({
+      success: result.ok,
+      message: result.message,
+      data: { latencyMs: result.latencyMs, modelEcho: result.modelEcho },
+    });
   } catch (err) {
     next(err);
   }

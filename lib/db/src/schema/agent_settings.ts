@@ -1,5 +1,14 @@
 import { pgTable, serial, jsonb, timestamp } from "drizzle-orm/pg-core";
 
+export type LlmProviderId = "sarvam" | "groq" | "openai" | "gemini";
+
+export interface LlmProviderCredential {
+  apiKey?: string;
+  model?: string;
+}
+
+export type LlmCredentialsMap = Partial<Record<LlmProviderId, LlmProviderCredential>>;
+
 export interface StoredAgentConfig {
   name: string;
   language: string;
@@ -9,6 +18,8 @@ export interface StoredAgentConfig {
   productName: string;
   maxTurns: number;
   customSystemPrompt: string | null;
+  llmProviderId?: LlmProviderId;
+  llmCredentials?: LlmCredentialsMap;
 }
 
 export const agentSettingsTable = pgTable("agent_settings", {

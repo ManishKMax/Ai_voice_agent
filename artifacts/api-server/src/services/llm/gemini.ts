@@ -55,10 +55,12 @@ export const geminiLlmProvider: LlmProvider = {
     const t0 = Date.now();
     try {
       const { systemInstruction, contents } = toGeminiContents(req.messages, req.userInput);
-      const url = `${BASE_URL}/${encodeURIComponent(useModel)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+      // Use the x-goog-api-key header rather than ?key= query param so the
+      // secret isn't captured by upstream/proxy access logs.
+      const url = `${BASE_URL}/${encodeURIComponent(useModel)}:generateContent`;
       const response = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify({
           contents,
           ...(systemInstruction ? { systemInstruction } : {}),
@@ -112,10 +114,10 @@ export const geminiLlmProvider: LlmProvider = {
     if (!apiKey) return { ok: false, message: "Gemini API key is required", latencyMs: 0 };
     const t0 = Date.now();
     try {
-      const url = `${BASE_URL}/${encodeURIComponent(useModel)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+      const url = `${BASE_URL}/${encodeURIComponent(useModel)}:generateContent`;
       const r = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: "Reply with the single word: OK" }] }],
           generationConfig: { temperature: 0, maxOutputTokens: 20 },

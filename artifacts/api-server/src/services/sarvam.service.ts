@@ -162,8 +162,8 @@ export function splitForTTS(text: string, maxChars = 200): string[] {
  */
 export function splitFirstClauseThen(
   text: string,
-  firstMin = 18,
-  firstMax = 80,
+  firstMin = 10,
+  firstMax = 45,
   restMax = 200,
 ): string[] {
   const t = text.trim();
@@ -172,16 +172,33 @@ export function splitFirstClauseThen(
   if (t.length <= firstMin) return [t];
 
   const window = t.slice(0, Math.min(firstMax, t.length));
-  // Prefer the LAST clause break inside the window so chunk 1 is as
-  // meaningful as possible while still under firstMax.
+  // Prefer the EARLIEST viable clause break ≥ firstMin so chunk 1 ships as
+  // soon as it's intelligible (was: last break inside window — sounded
+  // more "meaningful" but added 300-500ms to time-to-first-audio).
+  // Order matters: try strong breaks first (?, ;, em-dash, comma), then
+  // fall back to a plain space at ≥ firstMin if nothing punctuated exists.
   let cut = -1;
-  for (const re of [/[,;—–][\s"']/g, /[?][\s"']/g]) {
+  const findFirstBreak = (re: RegExp): number => {
     let m: RegExpExecArray | null;
     while ((m = re.exec(window)) !== null) {
-      // Include the punctuation, drop the trailing whitespace.
       const end = m.index + 1;
-      if (end >= firstMin && end <= firstMax) cut = end;
+      if (end >= firstMin && end <= firstMax) return end;
     }
+    return -1;
+  };
+  // Strong-break order: ? > ; > em-dash > , — these are real pauses.
+  for (const re of [/[?][\s"']/g, /[;][\s"']/g, /[—–][\s"']/g, /[,][\s"']/g]) {
+    cut = findFirstBreak(re);
+    if (cut !== -1) break;
+  }
+  // No punctuation in the window? Cut at the first space ≥ firstMin so we
+  // still get a small first chunk even on punctuation-free Hinglish like
+  // "Aapka time available hai kya mujhe call back karna chahiye".
+  // BUT only if the full text exceeds firstMax — for shorter replies one
+  // TTS call always beats two, so don't split what already fits.
+  if (cut === -1 && t.length > firstMax) {
+    const sp = t.indexOf(" ", firstMin);
+    if (sp !== -1 && sp <= firstMax) cut = sp;
   }
   if (cut === -1) return splitForTTS(t, restMax);
 

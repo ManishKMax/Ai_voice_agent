@@ -41,13 +41,21 @@ const LLM_PROVIDERS = [
   { id: "gemini", label: "Gemini 2.0 Flash" },
 ] as const;
 
-// Curated subset of Sarvam Bulbul v3 voices that sound most natural in
-// conversational use. Full list lives in replit.md ("Valid Sarvam voices
-// for bulbul:v3"); add more here once you've A/B-listened to them.
+// Curated Sarvam Bulbul v3 voices. The top section is the recommended
+// shortlist for Hinglish (Hindi+English code-mix) conversations — these
+// voices were A/B-tested and sound the most natural pronouncing English
+// loanwords inside Hindi sentences. The rest follows below for variety.
+// Full list lives in replit.md ("Valid Sarvam voices for bulbul:v3").
 const VOICE_OPTIONS = [
-  { id: "default", label: "Use Agent default" },
-  // Female
-  { id: "priya",    label: "Priya — warm, default" },
+  // Best for Hinglish — top of the list on purpose.
+  { id: "manisha",  label: "Manisha — warmest, best for Hinglish ★" },
+  { id: "vidya",    label: "Vidya — soft, friendly, Hinglish ★" },
+  { id: "anushka",  label: "Anushka — clear, professional, Hinglish ★" },
+  { id: "arjun",    label: "Arjun — natural Hinglish male ★" },
+  { id: "karun",    label: "Karun — friendly Hinglish male ★" },
+  { id: "default",  label: "Use Agent default" },
+  // Female (alternates)
+  { id: "priya",    label: "Priya — warm" },
   { id: "neha",     label: "Neha — bright, friendly" },
   { id: "kavya",    label: "Kavya — calm, professional" },
   { id: "shreya",   label: "Shreya — soft, conversational" },
@@ -55,8 +63,8 @@ const VOICE_OPTIONS = [
   { id: "ishita",   label: "Ishita — youthful" },
   { id: "ritu",     label: "Ritu — measured" },
   { id: "suhani",   label: "Suhani — expressive" },
-  // Male
-  { id: "rohan",    label: "Rohan — natural, default-male" },
+  // Male (alternates)
+  { id: "rohan",    label: "Rohan — natural" },
   { id: "aditya",   label: "Aditya — authoritative" },
   { id: "dev",      label: "Dev — friendly" },
   { id: "kabir",    label: "Kabir — deep, calm" },
@@ -64,14 +72,17 @@ const VOICE_OPTIONS = [
   { id: "varun",    label: "Varun — energetic" },
 ] as const;
 
-// BCP-47 language codes Sarvam Bulbul v3 supports. "auto" leaves the
-// agent's configured default in place — the TTS layer will additionally
-// flip to hi-IN automatically whenever a reply contains Devanagari, so
-// "auto" is the right default for mixed Hindi/English conversations.
+// BCP-47 language codes Sarvam Bulbul v3 supports. Hindi is the default
+// because it sounds most natural for Hinglish (Hindi+English code-mix):
+// the Hindi voice model pronounces English loanwords ("meeting", "call",
+// "discount") gracefully inside Hindi sentences, while the English model
+// butchers Hindi words. Auto-detect is offered as a fallback — it flips
+// to hi-IN whenever the reply contains Devanagari, but Hinglish written
+// in Latin script ("Aapka time hai kya?") stays on whatever you pick.
 const LANGUAGE_OPTIONS = [
-  { id: "default", label: "Auto-detect (recommended)" },
+  { id: "hi-IN", label: "Hindi (best for Hinglish) ★" },
+  { id: "default", label: "Auto-detect from reply script" },
   { id: "en-IN", label: "English (India)" },
-  { id: "hi-IN", label: "Hindi" },
   { id: "bn-IN", label: "Bengali" },
   { id: "ta-IN", label: "Tamil" },
   { id: "te-IN", label: "Telugu" },
@@ -180,8 +191,10 @@ export default function SimulatorPage() {
   // Settings → Agent. "default" sends no override; server resolves from
   // agent_settings. Language "default" also enables auto-detect: TTS will
   // flip to hi-IN automatically whenever the reply contains Devanagari.
-  const [voice, setVoice] = useState<string>("default");
-  const [language, setLanguage] = useState<string>("default");
+  // Default voice/language are tuned for Hinglish — see VOICE_OPTIONS /
+  // LANGUAGE_OPTIONS for rationale. Operator can still pick anything else.
+  const [voice, setVoice] = useState<string>("manisha");
+  const [language, setLanguage] = useState<string>("hi-IN");
 
   const [starting, setStarting] = useState(false);
   const [session, setSession] = useState<SessionInfo | null>(null);

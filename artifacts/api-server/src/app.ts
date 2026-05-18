@@ -32,6 +32,13 @@ app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 
 app.use(cors({ credentials: true, origin: true }));
 app.use(express.json({
+  // LiveKit Cloud posts webhooks with Content-Type `application/webhook+json`
+  // (not standard `application/json`). Without the broader matcher below,
+  // express.json() would skip parsing and `req.body` + `req.rawBody` would
+  // both be empty, silently breaking `/api/livekit/webhook` signature
+  // verification and event handling. Twilio's `application/json` and
+  // form posts continue to work.
+  type: ["application/json", "application/*+json", "application/webhook+json"],
   verify: (req: express.Request & { rawBody?: Buffer }, _res, buf) => {
     req.rawBody = Buffer.from(buf);
   },

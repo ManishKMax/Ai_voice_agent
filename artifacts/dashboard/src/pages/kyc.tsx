@@ -74,6 +74,57 @@ function docLabel(type: string) {
   return type === "aadhaar" ? "Aadhaar Card" : type === "gst" ? "GST Certificate" : type;
 }
 
+/**
+ * "Migrate to LiveKit" button on each tenant row. Pre-Phase-2 tenants
+ * have telephony_provider=NULL (treated as Twilio Legacy); this button
+ * flips them onto the new LiveKit SIP path via the admin migrate
+ * endpoint. Shows current provider + lets operators flip back to Twilio
+ * if a LiveKit trunk problem is detected, without needing DB access.
+ */
+function MigrateTelephonyButton({ tenant }: { tenant: Tenant }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const current = tenant.telephonyProvider ?? "twilio";
+  const target = current === "livekit" ? "twilio" : "livekit";
+  const targetLabel = target === "livekit" ? "Migrate to LiveKit" : "Revert to Twilio";
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      apiFetch(`/api/admin/tenants/${tenant.id}/migrate-telephony`, {
+        method: "POST",
+        body: JSON.stringify({ provider: target }),
+      }),
+    onSuccess: (res: { previous: string | null; current: string }) => {
+      qc.invalidateQueries({ queryKey: ["admin-tenants"] });
+      toast({
+        title: "Telephony updated",
+        description: `${tenant.name}: ${res.previous ?? "twilio"} → ${res.current}`,
+      });
+    },
+    onError: (err: Error) => {
+      toast({
+        title: "Migration failed",
+        description: err.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  return (
+    <button
+      onClick={() => {
+        if (!confirm(`Switch ${tenant.name} from ${current} to ${target}? Next call will use the new provider.`)) return;
+        mutation.mutate();
+      }}
+      disabled={mutation.isPending}
+      title={`Current: ${current}`}
+      className="text-xs font-semibold text-muted-foreground border border-border hover:bg-muted px-2.5 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+    >
+      {mutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : targetLabel}
+    </button>
+  );
+}
+
 function ReviewModal({
   tenant,
   onClose,
@@ -523,12 +574,15 @@ export default function KycReview() {
                       {new Date(t.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
                     </td>
                     <td className="px-5 py-4 text-right">
-                      <button
-                        onClick={() => setSelected(t)}
-                        className="text-xs font-semibold text-primary border border-primary/30 hover:bg-primary/10 px-3 py-1.5 rounded-lg transition-colors"
-                      >
-                        Review
-                      </button>
+                      <div className="inline-flex items-center gap-2">
+                        <MigrateTelephonyButton tenant={t} />
+                        <button
+                          onClick={() => setSelected(t)}
+                          className="text-xs font-semibold text-primary border border-primary/30 hover:bg-primary/10 px-3 py-1.5 rounded-lg transition-colors"
+                        >
+                          Review
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );

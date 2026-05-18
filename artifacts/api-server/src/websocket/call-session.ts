@@ -226,16 +226,37 @@ export class CallSession {
    * through to the configured provider.
    */
   private readonly llmProviderOverride: import("../services/llm/index.js").LlmProviderId | undefined;
+  /** Per-call voice/language overrides (Task #31 simulator). Resolved from
+   *  `customParameters.voice` / `customParameters.language` so a simulator
+   *  run can A/B speakers/locales without mutating `agentConfig`. Falls
+   *  through to the runtime agent config when unset. */
+  private readonly voiceOverride: string | undefined;
+  private readonly languageOverride: string | undefined;
 
   constructor(
     session: MediaStreamSession,
-    opts: { llmProviderOverride?: import("../services/llm/index.js").LlmProviderId } = {},
+    opts: {
+      llmProviderOverride?: import("../services/llm/index.js").LlmProviderId;
+      voiceOverride?: string;
+      languageOverride?: string;
+    } = {},
   ) {
     this.session = session;
     const leadIdRaw = session.customParameters["leadId"];
     this.leadId = leadIdRaw ? parseInt(leadIdRaw, 10) || 0 : 0;
     const rawOverride = opts.llmProviderOverride ?? session.customParameters["llmProvider"];
     this.llmProviderOverride = isLlmProviderId(rawOverride) ? rawOverride : undefined;
+    const v = opts.voiceOverride ?? session.customParameters["voice"];
+    const l = opts.languageOverride ?? session.customParameters["language"];
+    this.voiceOverride = typeof v === "string" && v.trim() ? v.trim() : undefined;
+    this.languageOverride = typeof l === "string" && l.trim() ? l.trim() : undefined;
+  }
+
+  private effectiveVoice(): string {
+    return this.voiceOverride ?? agentConfig.voice;
+  }
+  private effectiveLanguage(): string {
+    return this.languageOverride ?? agentConfig.language;
   }
 
   async start(): Promise<void> {
@@ -844,6 +865,12 @@ export class CallSession {
       userText: transcript,
       agentText,
       isEnd: shouldEnd,
+      // Wall-clock timestamps for the simulator transcript pane so each
+      // turn renders an absolute time, not just a turn number.
+      // Wall-clock approximation: turnStartMs is monotonic perf.now, so we
+      // back-derive an ISO timestamp by subtracting elapsed ms from now.
+      userAt: new Date(Date.now() - Math.max(0, performance.now() - turnStartMs)).toISOString(),
+      agentAt: new Date().toISOString(),
     });
 
     broadcastSse("call.turn", {
@@ -1089,7 +1116,12 @@ export class CallSession {
 
     // Kick off all TTS requests concurrently. They resolve out of order, but
     // we play them strictly in order via the awaited iteration below.
-    const ttsPromises = chunks.map((c) => generateSpeech(c, agentConfig));
+    const ttsPromises = chunks.map((c) =>
+      generateSpeech(c, agentConfig, {
+        voice: this.voiceOverride,
+        language: this.languageOverride,
+      }),
+    );
 
     let firstFrameLogged = false;
     // Stale-epoch check: any in-flight call from a superseded turn must not

@@ -1,9 +1,10 @@
 import type { Request, Response, NextFunction } from "express";
 import type { AuthRequest } from "../../middlewares/auth.js";
 import { randomUUID } from "crypto";
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { db } from "@workspace/db";
-import { leadsTable, callsTable } from "@workspace/db/schema";
+import { leadsTable, callsTable, callMetricsTable } from "@workspace/db/schema";
+import { getSession as getConvSession } from "../../services/conversation-state.js";
 import {
   mintLiveKitToken,
   getLiveKitCreds,
@@ -41,8 +42,29 @@ interface SimulatorRoomEntry {
   callSid: string;
   roomName: string;
   startedAt: number;
+  /** User id (admin) who initiated this simulator session. Used to gate
+   *  /stream and /end against cross-user access (IDOR). */
+  ownerUserId: number | null;
 }
 const simulatorRooms = new Map<number, SimulatorRoomEntry>();
+
+/** True if the request's caller is allowed to operate on this simulator
+ *  call. When we have an in-memory owner record we enforce a strict match;
+ *  if the record is absent (process restart, post-teardown) we fall back to
+ *  the `source === "simulator"` defence-in-depth check the SSE route already
+ *  performs. Returning the user id keeps the call sites symmetric. */
+function isOwner(req: Request, entry: SimulatorRoomEntry | undefined): boolean {
+  // Strict deny-by-default: if there's no in-memory ownership record (entry
+  // evicted, process restart, brute-forced id), only the super_admin role
+  // may inspect the simulator session. Same-role admins cannot read each
+  // other's calls even after teardown. Cf. code-review IDOR finding.
+  const auth = req as AuthRequest;
+  if (!entry || entry.ownerUserId == null) {
+    return auth.userRole === "SUPER_ADMIN";
+  }
+  const uid = auth.userId;
+  return typeof uid === "number" && uid === entry.ownerUserId;
+}
 
 export async function startSimulator(
   req: Request,
@@ -64,10 +86,14 @@ export async function startSimulator(
       leadName: rawName,
       leadPhone: rawPhone,
       llmProvider: rawProvider,
+      voice: rawVoice,
+      language: rawLanguage,
     } = req.body as {
       leadName?: string;
       leadPhone?: string;
       llmProvider?: string;
+      voice?: string;
+      language?: string;
     };
 
     const leadName =
@@ -81,6 +107,14 @@ export async function startSimulator(
     const llmProvider =
       typeof rawProvider === "string" && isLlmProviderId(rawProvider)
         ? rawProvider
+        : undefined;
+    const voice =
+      typeof rawVoice === "string" && rawVoice.trim()
+        ? rawVoice.trim().slice(0, 32)
+        : undefined;
+    const language =
+      typeof rawLanguage === "string" && rawLanguage.trim()
+        ? rawLanguage.trim().slice(0, 16)
         : undefined;
 
     // Pre-generate the LiveKit-style simulator call sid; CallSession will
@@ -146,6 +180,8 @@ export async function startSimulator(
         roomName,
         leadId: lead.id,
         llmProvider,
+        voice,
+        language,
         callSid,
         // Resilient cleanup: when the agent worker tears down for ANY
         // reason (browser tab closed, network drop, last_participant
@@ -189,10 +225,12 @@ export async function startSimulator(
       return;
     }
 
+    const ownerUserId = (req as AuthRequest).userId ?? null;
     simulatorRooms.set(call.id, {
       callSid,
       roomName,
       startedAt: Date.now(),
+      ownerUserId,
     });
 
     logger.info(
@@ -202,6 +240,9 @@ export async function startSimulator(
         callSid,
         roomName,
         llmProvider: llmProvider ?? "(default)",
+        voice: voice ?? "(default)",
+        language: language ?? "(default)",
+        ownerUserId,
       },
       "simulator_started",
     );
@@ -235,30 +276,93 @@ export async function endSimulator(
       return;
     }
     const entry = simulatorRooms.get(callId);
-    if (!entry) {
-      // Idempotent — return 200 so the browser's beforeunload cleanup
-      // doesn't fight with the user clicking End first.
-      res.json({ success: true, data: { alreadyEnded: true } });
+
+    // Defence-in-depth: confirm the call row exists and is a simulator call
+    // before we touch it (prevents cross-tenant abuse via brute-forced
+    // numeric IDs even when the in-memory map has been evicted).
+    const [callRow] = await db
+      .select({ id: callsTable.id, source: callsTable.source, sid: callsTable.twilioCallSid })
+      .from(callsTable)
+      .where(eq(callsTable.id, callId))
+      .limit(1);
+    if (!callRow) {
+      res.status(404).json({ success: false, message: "Call not found" });
       return;
     }
-    const handle = getLiveKitAgent(entry.roomName);
-    if (handle) {
-      try {
-        await handle.disconnect();
-      } catch (err) {
-        logger.warn(
-          { err: (err as Error).message, callId, roomName: entry.roomName },
-          "simulator_disconnect_failed",
-        );
-      }
+    if (callRow.source !== "simulator") {
+      res.status(403).json({ success: false, message: "Not a simulator call" });
+      return;
     }
-    simulatorRooms.delete(callId);
+    if (!isOwner(req, entry)) {
+      res.status(403).json({ success: false, message: "Not your simulator session" });
+      return;
+    }
+
+    // Snapshot the live conversation transcript BEFORE we disconnect — the
+    // agent worker's teardown path calls `endSession()` which evicts the
+    // in-memory conversation state, so a fetch-after-disconnect would
+    // return an empty transcript every time (code-review finding #2).
+    const convBefore = callRow.sid ? getConvSession(callRow.sid) : undefined;
+    const transcript = (convBefore?.messages ?? [])
+      .filter((m) => m.role !== "system")
+      .map((m) => ({ role: m.role, content: m.content }));
+
+    if (entry) {
+      const handle = getLiveKitAgent(entry.roomName);
+      if (handle) {
+        try {
+          await handle.disconnect();
+        } catch (err) {
+          logger.warn(
+            { err: (err as Error).message, callId, roomName: entry.roomName },
+            "simulator_disconnect_failed",
+          );
+        }
+      }
+      simulatorRooms.delete(callId);
+    }
     await db
       .update(callsTable)
       .set({ callStatus: "completed" })
       .where(eq(callsTable.id, callId))
       .catch(() => undefined);
-    res.json({ success: true, data: { ended: true } });
+
+    const metricRows = await db
+      .select()
+      .from(callMetricsTable)
+      .where(eq(callMetricsTable.callId, callId))
+      .orderBy(desc(callMetricsTable.turnId));
+
+    const median = (xs: number[]): number | null => {
+      const v = xs.filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+      if (v.length === 0) return null;
+      const m = Math.floor(v.length / 2);
+      return v.length % 2 ? v[m]! : (v[m - 1]! + v[m]!) / 2;
+    };
+    const pick = (k: keyof typeof metricRows[number]) =>
+      median(metricRows.map((r) => r[k] as number | null).filter((n): n is number => typeof n === "number"));
+    const metricsSummary = {
+      turnCount: metricRows.length,
+      p50: {
+        sttLatencyMs: pick("sttLatencyMs"),
+        llmFirstTokenMs: pick("llmFirstTokenMs"),
+        llmLatencyMs: pick("llmLatencyMs"),
+        ttsLatencyMs: pick("ttsLatencyMs"),
+        totalRoundtripMs: pick("totalRoundtripMs"),
+      },
+    };
+
+    res.json({
+      success: true,
+      data: {
+        ended: true,
+        alreadyEnded: !entry,
+        callId,
+        transcript,
+        metrics: metricRows,
+        metricsSummary,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -298,6 +402,14 @@ export async function streamSimulatorEvents(
       // Defence in depth — production call events should never be
       // streamable via this endpoint (would leak across tenants).
       res.status(403).json({ success: false, message: "Not a simulator call" });
+      return;
+    }
+    // IDOR guard: if we still have the in-memory owner, require a match.
+    // After teardown / process restart the entry is gone; the source check
+    // above is the residual guarantee for those windows.
+    const entry = simulatorRooms.get(callId);
+    if (!isOwner(req, entry)) {
+      res.status(403).json({ success: false, message: "Not your simulator session" });
       return;
     }
     const callSid = row.sid;

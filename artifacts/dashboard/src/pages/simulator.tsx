@@ -40,6 +40,29 @@ const LLM_PROVIDERS = [
   { id: "gemini", label: "Gemini 2.0 Flash" },
 ] as const;
 
+// Common Sarvam Bulbul-v3 speakers (the full list lives in replit.md).
+// "default" means "no per-call override — use platform setting".
+const VOICE_OPTIONS = [
+  { id: "default", label: "Use platform default" },
+  { id: "priya", label: "Priya (en-IN, female)" },
+  { id: "neha", label: "Neha (en-IN, female)" },
+  { id: "kavya", label: "Kavya (en-IN, female)" },
+  { id: "rohan", label: "Rohan (en-IN, male)" },
+  { id: "shubh", label: "Shubh (en-IN, male)" },
+  { id: "amit", label: "Amit (en-IN, male)" },
+] as const;
+
+const LANGUAGE_OPTIONS = [
+  { id: "default", label: "Use platform default" },
+  { id: "en-IN", label: "English (India)" },
+  { id: "hi-IN", label: "Hindi" },
+  { id: "te-IN", label: "Telugu" },
+  { id: "ta-IN", label: "Tamil" },
+  { id: "kn-IN", label: "Kannada" },
+  { id: "mr-IN", label: "Marathi" },
+  { id: "bn-IN", label: "Bengali" },
+] as const;
+
 // 13 metric fields, label + warn/error thresholds (ms). Thresholds match
 // the operator playbook in REPLIT.md ("acceptable: <800ms STT, <500ms LLM
 // first token", etc); deviating from these requires updating both files.
@@ -76,6 +99,9 @@ interface TranscriptTurn {
   turn: number;
   userText: string;
   agentText: string;
+  /** ISO timestamps captured server-side for each side of the turn. */
+  userAt?: string;
+  agentAt?: string;
 }
 
 interface LogEntry {
@@ -126,6 +152,8 @@ export default function SimulatorPage() {
   const [leadName, setLeadName] = useState("Test Lead");
   const [leadPhone, setLeadPhone] = useState("+910000000000");
   const [llmProvider, setLlmProvider] = useState<string>("sarvam");
+  const [voice, setVoice] = useState<string>("default");
+  const [language, setLanguage] = useState<string>("default");
 
   const [starting, setStarting] = useState(false);
   const [session, setSession] = useState<SessionInfo | null>(null);
@@ -194,7 +222,41 @@ export default function SimulatorPage() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [session]);
 
-  const handleStart = async () => {
+  /** Mid-call switch helpers — changing LLM/voice/language while a call is
+   *  active requires tearing down and reconnecting (CallSession reads its
+   *  overrides at constructor time, not per-turn). We prompt the operator,
+   *  then pass the *new* values explicitly to handleStart so it doesn't
+   *  rely on a setState that hasn't flushed yet. */
+  const switchAndRestart = async (
+    label: string,
+    apply: () => void,
+    overrides: { llmProvider?: string; voice?: string; language?: string },
+  ): Promise<void> => {
+    if (!session) { apply(); return; }
+    const ok = window.confirm(
+      `Changing ${label} mid-call will end the current call and start a fresh one with the new setting. Continue?`,
+    );
+    if (!ok) return;
+    apply();
+    await handleEnd();
+    await handleStart(overrides);
+  };
+  const handleLlmChange = (next: string) => {
+    void switchAndRestart("LLM provider", () => setLlmProvider(next), { llmProvider: next });
+  };
+  const handleVoiceChange = (next: string) => {
+    void switchAndRestart("voice", () => setVoice(next), { voice: next });
+  };
+  const handleLanguageChange = (next: string) => {
+    void switchAndRestart("language", () => setLanguage(next), { language: next });
+  };
+
+  const handleStart = async (
+    overrides?: { llmProvider?: string; voice?: string; language?: string },
+  ) => {
+    const effProvider = overrides?.llmProvider ?? llmProvider;
+    const effVoice = overrides?.voice ?? voice;
+    const effLanguage = overrides?.language ?? language;
     setError(null);
     setTranscript([]);
     setAllMetrics([]);
@@ -204,7 +266,16 @@ export default function SimulatorPage() {
     try {
       const startRes = await apiFetch("/api/simulator/start", {
         method: "POST",
-        body: JSON.stringify({ leadName, leadPhone, llmProvider }),
+        body: JSON.stringify({
+          leadName,
+          leadPhone,
+          llmProvider: effProvider,
+          // Only send overrides when the operator picked something other
+          // than "use platform default" — keeps the payload minimal and
+          // lets the server resolve from agent_settings as usual.
+          voice: effVoice === "default" ? undefined : effVoice,
+          language: effLanguage === "default" ? undefined : effLanguage,
+        }),
       });
       if (!startRes?.success) {
         throw new Error(startRes?.message ?? "Failed to start simulator");
@@ -250,7 +321,16 @@ export default function SimulatorPage() {
       sseRef.current = es;
       es.addEventListener("transcript", (ev: MessageEvent) => {
         const parsed = JSON.parse(ev.data) as TranscriptTurn & { ts: number };
-        setTranscript((t) => [...t, { turn: parsed.turn, userText: parsed.userText, agentText: parsed.agentText }]);
+        setTranscript((t) => [
+          ...t,
+          {
+            turn: parsed.turn,
+            userText: parsed.userText,
+            agentText: parsed.agentText,
+            userAt: parsed.userAt,
+            agentAt: parsed.agentAt,
+          },
+        ]);
       });
       es.addEventListener("metrics", (ev: MessageEvent) => {
         const parsed = JSON.parse(ev.data) as MetricRow & { ts: number };
@@ -329,18 +409,18 @@ export default function SimulatorPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
-            <div className="space-y-1">
+          <div className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
+            <div className="space-y-1 md:col-span-2">
               <Label htmlFor="sim-name">Lead name</Label>
               <Input id="sim-name" value={leadName} onChange={(e) => setLeadName(e.target.value)} disabled={!!session} />
             </div>
-            <div className="space-y-1">
-              <Label htmlFor="sim-phone">Phone</Label>
+            <div className="space-y-1 md:col-span-2">
+              <Label htmlFor="sim-phone">Phone (display only)</Label>
               <Input id="sim-phone" value={leadPhone} onChange={(e) => setLeadPhone(e.target.value)} disabled={!!session} />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1 md:col-span-2">
               <Label>LLM provider</Label>
-              <Select value={llmProvider} onValueChange={setLlmProvider} disabled={!!session}>
+              <Select value={llmProvider} onValueChange={handleLlmChange}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {LLM_PROVIDERS.map((p) => (
@@ -349,9 +429,31 @@ export default function SimulatorPage() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label>Voice</Label>
+              <Select value={voice} onValueChange={handleVoiceChange}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {VOICE_OPTIONS.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label>Language</Label>
+              <Select value={language} onValueChange={handleLanguageChange}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {LANGUAGE_OPTIONS.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="flex gap-2 md:col-span-2 justify-end">
               {!session ? (
-                <Button onClick={handleStart} disabled={starting} className="w-full md:w-auto">
+                <Button onClick={() => void handleStart()} disabled={starting} className="w-full md:w-auto">
                   <PhoneCall className="h-4 w-4 mr-2" /> {starting ? "Starting…" : "Start call"}
                 </Button>
               ) : (
@@ -389,19 +491,29 @@ export default function SimulatorPage() {
                   No turns yet. {session ? "Speak after the agent's greeting." : "Start a call to begin."}
                 </div>
               )}
-              {transcript.map((t) => (
-                <div key={t.turn} className="space-y-1">
-                  <div className="text-xs text-muted-foreground">Turn {t.turn}</div>
-                  <div className="rounded-lg bg-muted/50 px-3 py-2 text-sm">
-                    <div className="text-[10px] uppercase text-muted-foreground mb-0.5">You</div>
-                    {t.userText || <span className="text-muted-foreground italic">(silence)</span>}
+              {transcript.map((t) => {
+                const userTs = t.userAt ? new Date(t.userAt).toLocaleTimeString() : null;
+                const agentTs = t.agentAt ? new Date(t.agentAt).toLocaleTimeString() : null;
+                return (
+                  <div key={t.turn} className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Turn {t.turn}</div>
+                    <div className="rounded-lg bg-muted/50 px-3 py-2 text-sm">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="text-[10px] uppercase text-muted-foreground">You</span>
+                        {userTs && <span className="text-[10px] text-muted-foreground font-mono">{userTs}</span>}
+                      </div>
+                      {t.userText || <span className="text-muted-foreground italic">(silence)</span>}
+                    </div>
+                    <div className="rounded-lg bg-primary/10 px-3 py-2 text-sm">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="text-[10px] uppercase text-muted-foreground">Agent</span>
+                        {agentTs && <span className="text-[10px] text-muted-foreground font-mono">{agentTs}</span>}
+                      </div>
+                      {t.agentText}
+                    </div>
                   </div>
-                  <div className="rounded-lg bg-primary/10 px-3 py-2 text-sm">
-                    <div className="text-[10px] uppercase text-muted-foreground mb-0.5">Agent</div>
-                    {t.agentText}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </CardContent>
         </Card>

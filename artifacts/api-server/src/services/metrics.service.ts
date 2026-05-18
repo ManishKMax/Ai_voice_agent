@@ -91,6 +91,14 @@ export async function getLatencyAggregates(q: LatencyAggregateQuery) {
   // to avg for that metric since percentiles of throughput are less useful.
   exprs.push(sql.raw(`avg(llm_tokens_per_sec) as llm_tokens_per_sec_avg`));
 
+  // Exclude simulator-sourced turns from production latency aggregates so
+  // operator test calls don't skew the Reports → Voice Latency widget
+  // (Task #31 code-review finding #4). Production rows have source='production'
+  // or null (pre-Task-31 historical data).
+  const sourceFilter = sql`call_id in (select id from calls where source is null or source <> 'simulator')`;
+  const finalWhere = whereClause
+    ? sql`where ${whereClause} and ${sourceFilter}`
+    : sql`where ${sourceFilter}`;
   const rows = await db.execute<Record<string, number | string | null>>(sql`
     select
       date_trunc(${bucket}, created_at) as bucket,
@@ -98,7 +106,7 @@ export async function getLatencyAggregates(q: LatencyAggregateQuery) {
       count(*)::int as turn_count,
       ${sql.join(exprs, sql`, `)}
     from call_metrics
-    ${whereClause ? sql`where ${whereClause}` : sql``}
+    ${finalWhere}
     group by bucket, llm_provider
     order by bucket asc
   `);

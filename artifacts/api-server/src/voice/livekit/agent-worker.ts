@@ -73,6 +73,10 @@ interface StartLiveKitAgentOptions {
   leadId?: number;
   /** Per-call LLM provider override (sarvam/openai/groq/gemini). */
   llmProvider?: string;
+  /** Per-call Sarvam TTS voice override (e.g. "priya", "rohan"). */
+  voice?: string;
+  /** Per-call BCP-47 language code override (e.g. "en-IN", "hi-IN"). */
+  language?: string;
   /** Optional human-friendly call SID for logs. Generated if absent. */
   callSid?: string;
   /** Fired exactly once when this worker tears down for any reason
@@ -213,6 +217,12 @@ async function doStartLiveKitAgent(
   if (opts.llmProvider && isLlmProviderId(opts.llmProvider)) {
     customParameters["llmProvider"] = opts.llmProvider;
   }
+  if (opts.voice && opts.voice.trim()) {
+    customParameters["voice"] = opts.voice.trim();
+  }
+  if (opts.language && opts.language.trim()) {
+    customParameters["language"] = opts.language.trim();
+  }
 
   const format: MediaStreamFormat = {
     encoding: "audio/pcm",
@@ -278,6 +288,8 @@ async function doStartLiveKitAgent(
     llmProviderOverride: isLlmProviderId(opts.llmProvider)
       ? (opts.llmProvider as LlmProviderId)
       : undefined,
+    voiceOverride: opts.voice?.trim() || undefined,
+    languageOverride: opts.language?.trim() || undefined,
   });
 
   // Track inbound-stream readers so teardown can cancel them. Without

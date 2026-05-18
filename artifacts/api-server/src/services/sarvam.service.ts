@@ -165,8 +165,11 @@ export function truncateForTTS(text: string, maxChars = TTS_MAX_CHARS): string {
  */
 export async function generateSpeech(
   text: string,
-  cfg: AgentConfig
+  cfg: AgentConfig,
+  overrides?: { voice?: string; language?: string },
 ): Promise<Buffer | null> {
+  const voice = overrides?.voice ?? cfg.voice;
+  const language = overrides?.language ?? cfg.language;
   if (!config.sarvam.apiKey) {
     logger.warn("SARVAM_API_KEY not set — skipping TTS");
     return null;
@@ -194,8 +197,8 @@ export async function generateSpeech(
         // favour of a single `text` string. Old form still works but logs a
         // deprecation warning on every call — use the new field.
         text: safeText,
-        target_language_code: cfg.language,
-        speaker: cfg.voice,
+        target_language_code: language,
+        speaker: voice,
         model: TTS_MODEL,
         enable_preprocessing: true,
         target_sample_rate_hz: 8000,  // 8kHz WAV — standard telephony, compatible with Twilio <Play>

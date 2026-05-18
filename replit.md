@@ -358,12 +358,35 @@ Operational runbook — first-time SIP trunk setup:
 
 What's intentionally NOT in Phase 2:
 - No automated SIP trunk provisioning — operational, user-driven.
+- No boot-time SIP trunk callability probe — `probeLiveKit()` exercises
+  RoomService only. SIP creds are tested by the first real dispatch and
+  surfaced via `livekit_outbound_dispatch` / `livekit_sip_participant_created`
+  / Twirp error logs. Adding a `createSipParticipant` dry-run probe
+  requires consuming a DID minute per boot, so it's deferred to the
+  follow-up that adds the Settings UI test button.
 - No `livekit_transport_ms` metric persisted yet (TODO once we can read
   WebRTC RTC stats off the room from agent-worker). The end-to-end
   per-turn latency in `call_metrics` already covers user-visible latency.
 - No Settings UI form for the per-tenant LiveKit SIP fields — set via
   `PATCH /api/portal/credentials` `{telephonyProvider:"livekit",livekit:{sipTrunkId,outboundNumber}}`
   for now, full UI in a follow-up.
+- No tenant trunk allowlist enforcement. Tenants can set arbitrary
+  `livekit_sip_trunk_id`, and LiveKit Cloud will accept any trunk the
+  account owns. For deployments with multiple tenants on the same
+  LiveKit account, isolation must be enforced operationally by giving
+  each tenant a separate LiveKit project (separate API key/secret pair)
+  — schema-level allowlist is a follow-up.
+
+Migration safety for pre-Phase-2 tenants:
+- Tenants created before Phase 2 have `telephony_provider = NULL`.
+  `dispatchCall()` treats NULL as "twilio" so existing customer calls
+  keep routing through their previously-configured Twilio numbers and
+  do **not** silently jump onto an unprovisioned LiveKit trunk after
+  upgrade. The column default is now `'livekit'` so brand-new tenants
+  default to the Phase 2 path.
+- To migrate an existing tenant onto LiveKit:
+  `UPDATE tenants SET telephony_provider='livekit' WHERE id=$1;` after
+  confirming the platform or per-tenant SIP trunk is set.
 
 ### Voice acceptance test
 

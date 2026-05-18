@@ -32,7 +32,9 @@ router.use(authRouter);
 router.use(leadsRouter);
 router.use(callsRouter);
 router.use(livekitRouter);
-router.use("/livekit", livekitWebhookRouter);
+// Webhook router defines POST /livekit/webhook — mount at root so the
+// effective path is /api/livekit/webhook (matches LiveKit Cloud config).
+router.use(livekitWebhookRouter);
 router.use("/calls", callOutcomeRouter);
 router.use(callMetricsRouter);
 router.use(queueRouter);

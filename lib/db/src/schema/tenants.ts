@@ -17,7 +17,10 @@ export const tenantsTable = pgTable("tenants", {
   kycStatus: text("kyc_status").$type<TenantKycStatus>().default("pending").notNull(),
   trialCallsUsed: integer("trial_calls_used").default(0).notNull(),
   isActive: boolean("is_active").default(true).notNull(),
-  telephonyProvider: text("telephony_provider"),
+  // New tenants default to "livekit" (Phase 2). Pre-Phase-2 rows have NULL
+  // and are treated as "twilio" in dispatchCall to preserve their existing
+  // routing until an operator explicitly migrates them.
+  telephonyProvider: text("telephony_provider").default("livekit"),
   twilioAccountSid: text("twilio_account_sid"),
   twilioAuthToken: text("twilio_auth_token"),
   twilioPhoneNumber: text("twilio_phone_number"),

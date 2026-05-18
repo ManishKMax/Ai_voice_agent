@@ -206,6 +206,8 @@ router.get("/credentials", requireClerkAuth, async (req: any, res, next) => {
   try {
     const tenant = await getOrCreateTenant(req.clerkUserId, "User", "");
     res.json({
+      // Pre-Phase-2 tenants (NULL provider) are still served from Twilio
+      // until explicitly migrated — mirror that in the read path.
       telephonyProvider: tenant.telephonyProvider ?? "twilio",
       twilio: {
         accountSid: tenant.twilioAccountSid ?? "",
@@ -217,6 +219,16 @@ router.get("/credentials", requireClerkAuth, async (req: any, res, next) => {
         apiKey: tenant.exotelApiKey ?? "",
         apiTokenMasked: tenant.exotelApiToken ? "••••••••" : "",
         phoneNumber: tenant.exotelPhoneNumber ?? "",
+      },
+      livekit: {
+        // Trunk ID is not secret (it's a public LiveKit resource handle),
+        // but we expose ony the suffix to discourage UI copy-paste leaks.
+        sipTrunkId: tenant.livekitSipTrunkId ?? "",
+        outboundNumber: tenant.livekitSipOutboundNumber ?? "",
+        // Indicates whether platform-wide env defaults will be used when
+        // tenant fields are blank.
+        usingPlatformDefault:
+          !tenant.livekitSipTrunkId && !!process.env["LIVEKIT_SIP_TRUNK_ID"],
       },
     });
   } catch (err) {

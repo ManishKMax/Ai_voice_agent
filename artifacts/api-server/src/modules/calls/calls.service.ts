@@ -37,7 +37,13 @@ async function dispatchCall(
     return initiateCall(toPhone, leadId, undefined, { llmProviderOverride: options.llmProviderOverride });
   }
 
-  const provider = tenant.telephonyProvider ?? "livekit";
+  // Migration safety: tenants with NULL telephony_provider predate Phase 2
+  // and were historically routed through Twilio. Preserve that until an
+  // operator explicitly opts them into LiveKit via the Settings UI or
+  //   UPDATE tenants SET telephony_provider='livekit' WHERE id=$1;
+  // New tenants get the "livekit" column default at insert time (set in
+  // the schema), so this null-fallback only affects pre-Phase-2 rows.
+  const provider = tenant.telephonyProvider ?? "twilio";
 
   if (provider === "livekit") {
     // Phase 2: outbound PSTN routes through LiveKit SIP trunk + in-process

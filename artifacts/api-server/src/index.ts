@@ -6,6 +6,7 @@ import { triggerCallForLead } from "./modules/calls/calls.service.js";
 import { resetStuckCallingLeads } from "./modules/leads/leads.service.js";
 import { loadAgentConfig } from "./config/agent.config.js";
 import { loadPlatformSettings } from "./config/platform.config.js";
+import { probeLiveKit } from "./services/livekit.service.js";
 import { attachMediaStreamServer } from "./websocket/media-stream.js";
 // Importing for side effects: registers the Phase-3 CallSession subscriber on
 // the Media Streams server so live WS calls (VOICE_PIPELINE=ws) get handled.
@@ -64,6 +65,13 @@ httpServer.listen(port, async () => {
   // tokens of latency per turn. Probe runs once at boot, fire-and-forget,
   // never blocks startup, never affects live traffic.
   void probeEnableThinking();
+
+  // Boot-time LiveKit credential probe (Task #30). Fail-soft: missing creds
+  // log at info-level and skip — LiveKit is opt-in transport, the rest of
+  // the system runs fine without it. A successful probe only proves the
+  // SDK loaded and creds are present; the actual SFU connection is exercised
+  // when the first simulator call comes in.
+  void probeLiveKit();
 });
 
 async function probeEnableThinking(): Promise<void> {

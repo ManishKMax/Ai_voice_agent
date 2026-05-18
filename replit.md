@@ -236,6 +236,51 @@ Adding a new IVR (e.g. Plivo):
 4. Add the matching `tenants.telephony_provider` enum value (already a
    `text` column — no schema change needed for new providers).
 
+### LiveKit transport (Phase 1 — Call Simulator)
+
+Task #30 adds LiveKit as a third transport. Unlike Twilio/Exotel (text-
+envelope WebSockets to `/api/voice/stream`), LiveKit is a WebRTC SFU —
+audio flows over peer-published Opus tracks, not over the media-stream WS
+endpoint.
+
+Architecture:
+- `voice/ivr/livekit-provider.ts` — `IvrProvider` impl. Codec functions
+  are **identity passthroughs** because `@livekit/rtc-node`'s `AudioStream`
+  and `AudioSource` natively handle Opus 48 kHz stereo ↔ PCM s16le 8 kHz
+  mono resampling at the FFI layer. WS envelope methods return `null`/`""`
+  because the WebRTC path bypasses `media-stream.ts` entirely.
+- `services/livekit.service.ts` — `mintLiveKitToken()` (signed JWT via
+  `livekit-server-sdk`) + boot-time `probeLiveKit()` (fail-soft if creds
+  missing — LiveKit is opt-in transport).
+- `voice/livekit/agent-worker.ts` — in-process agent. `startLiveKitAgent()`
+  connects an agent participant to a room, subscribes to remote audio
+  tracks at 8 kHz mono via `AudioStream(track, {sampleRate:8000,
+  numChannels:1, frameSizeMs:20})`, and pumps each `AudioFrame` into a
+  synthetic `MediaStreamSession` whose `sendAudio()` wraps outbound PCM
+  into `AudioFrame` for `AudioSource.captureFrame()`. The brain
+  (`CallSession`) runs unchanged.
+- `modules/calls/livekit.routes.ts` — admin-JWT-gated:
+  - `POST /api/voice/livekit/token` — mint participant join token for
+    the browser-side Call Simulator. Body: `{identity?, roomName?, name?}`.
+  - `POST /api/voice/livekit/start-agent` — spawn the in-process agent
+    worker in the named room. Body: `{roomName, leadId?, llmProvider?,
+    callSid?}`.
+
+Env vars (Phase 1 — no Settings UI yet, env-only):
+- `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` — from LiveKit Cloud project
+- `LIVEKIT_URL` — `wss://<project>.livekit.cloud`
+
+Frame size choice: 20 ms / 320 bytes PCM s16le 8 kHz mono on both
+inbound and outbound — identical pacing to Twilio so `CallSession`'s
+per-frame VAD, barge-in timing, and per-stage latency metrics remain
+numerically comparable across carriers.
+
+What's intentionally NOT in Phase 1:
+- No Settings UI sub-card (creds live in env vars only).
+- No PSTN bridge — Phase 2 will wire LiveKit SIP trunk so real lead
+  calls can route through LiveKit instead of Twilio Media Streams.
+- No tenant-scoped credentials (single platform-wide LiveKit project).
+
 ### Voice acceptance test
 
 `pnpm --filter @workspace/scripts run voice-acceptance-test` replays a

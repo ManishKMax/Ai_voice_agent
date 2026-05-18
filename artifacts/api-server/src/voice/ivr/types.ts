@@ -24,7 +24,7 @@
  *     8 kHz = 160 bytes μ-law = 20 ms; other carriers may differ).
  */
 
-export type IvrProviderId = "twilio" | "exotel";
+export type IvrProviderId = "twilio" | "exotel" | "livekit";
 
 /**
  * Normalised inbound envelope union. Every carrier's WS protocol must map

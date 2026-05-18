@@ -5,6 +5,7 @@ import { logger } from "../../lib/logger.js";
 import type { IvrProvider, IvrProviderId } from "./types.js";
 import { TwilioMediaStreamsProvider } from "./twilio-provider.js";
 import { ExotelMediaStreamsProvider } from "./exotel-provider.js";
+import { LiveKitProvider } from "./livekit-provider.js";
 
 /**
  * Provider registry. Adding a new IVR (e.g. Plivo) is two lines:
@@ -17,11 +18,12 @@ import { ExotelMediaStreamsProvider } from "./exotel-provider.js";
 const REGISTRY: Record<IvrProviderId, IvrProvider> = {
   twilio: new TwilioMediaStreamsProvider(),
   exotel: new ExotelMediaStreamsProvider(),
+  livekit: new LiveKitProvider(),
 };
 
 /** Get a provider by id, falling back to Twilio for unknown values. */
 export function getIvrProvider(id: string | null | undefined): IvrProvider {
-  if (id === "twilio" || id === "exotel") return REGISTRY[id];
+  if (id === "twilio" || id === "exotel" || id === "livekit") return REGISTRY[id];
   return REGISTRY.twilio;
 }
 
@@ -69,3 +71,4 @@ export async function resolveProviderForLead(leadId: number): Promise<IvrProvide
 export type { IvrProvider, IvrProviderId, IvrEnvelope } from "./types.js";
 export { TwilioMediaStreamsProvider } from "./twilio-provider.js";
 export { ExotelMediaStreamsProvider } from "./exotel-provider.js";
+export { LiveKitProvider } from "./livekit-provider.js";

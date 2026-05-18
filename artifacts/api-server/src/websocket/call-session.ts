@@ -1134,6 +1134,11 @@ export class CallSession {
       generateSpeech(c, agentConfig, {
         voice: this.voiceOverride,
         language: this.languageOverride,
+        // Ask Sarvam for the wire-format rate that matches this session's
+        // outbound channel: 8 kHz for telephony, 24 kHz for HD simulator.
+        // Bulbul often ignores the hint and returns 22050/24000 anyway —
+        // the resampler in the chunk loop below handles either case.
+        targetSampleRateHz: this.session.format.outboundSampleRate ?? this.session.format.sampleRate,
       }),
     );
 
@@ -1179,25 +1184,35 @@ export class CallSession {
         );
       }
       if (srcChannels === 2) pcm = stereoToMonoPcm16(pcm);
-      if (srcRate !== 8000) {
+      // HD audio: simulator sets format.outboundSampleRate=24000 so we ship
+      // Sarvam's native-rate PCM straight to the browser with no telephony
+      // downsample. Twilio/Exotel/SIP leave it unset → telephony 8 kHz.
+      const targetOutRate = this.session.format.outboundSampleRate ?? this.session.format.sampleRate;
+      if (srcRate !== targetOutRate) {
         if (!this.ttsResamplingNoticeLogged) {
           // INFO not WARN: Sarvam Bulbul:v3 routinely ignores
-          // target_sample_rate_hz=8000 and returns 22050/24000 even when we
-          // ask for 8000. The on-the-fly resample is correct behaviour, not
-          // a fault — emitting a per-turn WARN was just spamming the log.
-          // Once-per-call info gives us the same observability without noise.
+          // target_sample_rate_hz hints and returns 22050/24000 anyway.
+          // The on-the-fly resample is correct behaviour, not a fault.
           // See replit.md ("Sarvam TTS sample rate") for context.
           this.ttsResamplingNoticeLogged = true;
           logger.info(
-            { call_id: this.session.callSid, srcRate, srcChannels, srcBits },
-            "call_session_tts_resampling_to_8khz",
+            { call_id: this.session.callSid, srcRate, targetOutRate, srcChannels, srcBits },
+            "call_session_tts_resampling",
           );
         }
-        pcm = resamplePcm16Mono(pcm, srcRate, 8000);
+        pcm = resamplePcm16Mono(pcm, srcRate, targetOutRate);
       }
 
-      const frameBytesPcm = this.provider.outboundFrameBytesPcm();
       const frameIntervalMs = this.provider.outboundFrameIntervalMs();
+      // Frame byte size scales with outbound sample rate so 20 ms of audio
+      // is always one wire frame, regardless of carrier bandwidth.
+      // (Provider's outboundFrameBytesPcm() is the telephony default; HD
+      // mode overrides because the provider singleton doesn't know
+      // per-session rates.)
+      const frameBytesPcm =
+        this.session.format.outboundSampleRate != null
+          ? Math.round((targetOutRate * frameIntervalMs) / 1000) * 2
+          : this.provider.outboundFrameBytesPcm();
       const totalFrames = Math.ceil(pcm.length / frameBytesPcm);
       const startedAtChunk = performance.now();
 

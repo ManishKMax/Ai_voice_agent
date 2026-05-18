@@ -27,8 +27,19 @@ export const MEDIA_STREAM_PATH = "/api/voice/stream";
 
 export interface MediaStreamFormat {
   encoding: string;
+  /** Inbound (mic → brain) wire-format sample rate. STT and VAD work at
+   *  this rate. Always 8 kHz today (telephony native, and even the LiveKit
+   *  simulator downsamples inbound to 8 kHz so the brain stays carrier-
+   *  agnostic). */
   sampleRate: number;
   channels: number;
+  /** Optional outbound (brain → caller) PCM sample rate. When unset,
+   *  outbound uses `sampleRate` (8 kHz, telephony). The LiveKit simulator
+   *  sets this to 24 kHz so TTS audio reaches the browser at Sarvam's
+   *  native bandwidth — no resample, no telephony low-pass, dramatically
+   *  more natural voice. Twilio/Exotel/SIP paths leave this unset because
+   *  PSTN carriers physically can't carry >8 kHz audio. */
+  outboundSampleRate?: number;
 }
 
 export interface MediaStreamSession {

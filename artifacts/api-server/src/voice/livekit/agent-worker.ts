@@ -63,6 +63,16 @@ const SAMPLE_RATE = 8000;
 const NUM_CHANNELS = 1;
 // 20 ms @ 8 kHz mono = 160 samples = 320 bytes (s16le)
 const FRAME_BYTES = 320;
+// HD AUDIO (simulator only): Sarvam TTS natively produces 22050/24000 Hz
+// WAV. Telephony forces us to downsample to 8 kHz, which strips all the
+// presence/naturalness from the voice. In the browser-only simulator there
+// is no PSTN bottleneck, so we publish outbound at 24 kHz mono — the
+// browser hears effectively the same audio Sarvam's own website demo
+// plays. Inbound (mic → brain) stays 8 kHz so the brain (STT + VAD) is
+// completely carrier-agnostic.
+const HD_OUTBOUND_SAMPLE_RATE = 24000;
+// 20 ms @ 24 kHz mono = 480 samples = 960 bytes (s16le)
+const HD_OUTBOUND_FRAME_BYTES = 960;
 
 interface StartLiveKitAgentOptions {
   roomName: string;
@@ -205,7 +215,12 @@ async function doStartLiveKitAgent(
   });
 
   const room = new Room();
-  const audioSource = new AudioSource(SAMPLE_RATE, NUM_CHANNELS);
+  // HD mode is opt-in via source="simulator". Production / SIP paths stay
+  // at telephony 8 kHz so PSTN carriers can transport the audio unchanged.
+  const isHd = opts.source === "simulator";
+  const outboundSampleRate = isHd ? HD_OUTBOUND_SAMPLE_RATE : SAMPLE_RATE;
+  const outboundFrameBytes = isHd ? HD_OUTBOUND_FRAME_BYTES : FRAME_BYTES;
+  const audioSource = new AudioSource(outboundSampleRate, NUM_CHANNELS);
   const localTrack = LocalAudioTrack.createAudioTrack("agent-mic", audioSource);
 
   // Build the synthetic MediaStreamSession that CallSession consumes. The
@@ -240,8 +255,15 @@ async function doStartLiveKitAgent(
 
   const format: MediaStreamFormat = {
     encoding: "audio/pcm",
+    // Inbound (browser mic → CallSession): always 8 kHz so STT & VAD stay
+    // carrier-agnostic. AudioStream downsamples Opus 48 kHz → 8 kHz mono.
     sampleRate: SAMPLE_RATE,
     channels: NUM_CHANNELS,
+    // Outbound (CallSession → browser): 24 kHz in simulator HD mode so
+    // Sarvam TTS reaches the user at near-native bandwidth instead of being
+    // crushed through the telephony 8 kHz pipe. CallSession reads this to
+    // decide its TTS target_sample_rate_hz and outbound frame byte size.
+    outboundSampleRate,
   };
 
   // Build a fully-typed MediaStreamSession. The fields the WS server
@@ -261,10 +283,13 @@ async function doStartLiveKitAgent(
     stopped: false,
     provider: getIvrProvider("livekit"),
     sendAudio(payload: Buffer) {
-      // payload is PCM s16le 8 kHz mono (LiveKitProvider.encodeOutboundFrame
-      // is identity). Pace is handled by CallSession.streamTtsToTwilio,
-      // which awaits ~20 ms between frame sends — captureFrame is fire-and-
-      // forget for the AudioSource's internal queue.
+      // payload is PCM s16le at `outboundSampleRate` mono
+      // (LiveKitProvider.encodeOutboundFrame is identity). In production
+      // that's 8 kHz; in HD simulator mode it's 24 kHz (matching the
+      // AudioSource we constructed above). Pace is handled by
+      // CallSession.streamTtsToTwilio, which awaits one frame interval
+      // between sends — captureFrame is fire-and-forget for the
+      // AudioSource's internal queue.
       if (sentinelSession.stopped) return;
       if (payload.length === 0) return;
       try {
@@ -275,7 +300,7 @@ async function doStartLiveKitAgent(
         for (let i = 0; i < samples; i++) {
           int16[i] = payload.readInt16LE(i * 2);
         }
-        const frame = new AudioFrame(int16, SAMPLE_RATE, NUM_CHANNELS, samples);
+        const frame = new AudioFrame(int16, outboundSampleRate, NUM_CHANNELS, samples);
         void audioSource.captureFrame(frame).catch((err) => {
           logger.warn(
             { err: (err as Error).message, callSid, roomName: opts.roomName },

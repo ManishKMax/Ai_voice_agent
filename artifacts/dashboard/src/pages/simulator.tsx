@@ -41,9 +41,47 @@ const LLM_PROVIDERS = [
   { id: "gemini", label: "Gemini 2.0 Flash" },
 ] as const;
 
-// Voice + language are sourced from Settings → Agent on the server side
-// (agent_settings table). They are intentionally NOT overridable from the
-// simulator so test calls match what real leads will hear.
+// Curated subset of Sarvam Bulbul v3 voices that sound most natural in
+// conversational use. Full list lives in replit.md ("Valid Sarvam voices
+// for bulbul:v3"); add more here once you've A/B-listened to them.
+const VOICE_OPTIONS = [
+  { id: "default", label: "Use Agent default" },
+  // Female
+  { id: "priya",    label: "Priya — warm, default" },
+  { id: "neha",     label: "Neha — bright, friendly" },
+  { id: "kavya",    label: "Kavya — calm, professional" },
+  { id: "shreya",   label: "Shreya — soft, conversational" },
+  { id: "pooja",    label: "Pooja — confident" },
+  { id: "ishita",   label: "Ishita — youthful" },
+  { id: "ritu",     label: "Ritu — measured" },
+  { id: "suhani",   label: "Suhani — expressive" },
+  // Male
+  { id: "rohan",    label: "Rohan — natural, default-male" },
+  { id: "aditya",   label: "Aditya — authoritative" },
+  { id: "dev",      label: "Dev — friendly" },
+  { id: "kabir",    label: "Kabir — deep, calm" },
+  { id: "shubh",    label: "Shubh — youthful" },
+  { id: "varun",    label: "Varun — energetic" },
+] as const;
+
+// BCP-47 language codes Sarvam Bulbul v3 supports. "auto" leaves the
+// agent's configured default in place — the TTS layer will additionally
+// flip to hi-IN automatically whenever a reply contains Devanagari, so
+// "auto" is the right default for mixed Hindi/English conversations.
+const LANGUAGE_OPTIONS = [
+  { id: "default", label: "Auto-detect (recommended)" },
+  { id: "en-IN", label: "English (India)" },
+  { id: "hi-IN", label: "Hindi" },
+  { id: "bn-IN", label: "Bengali" },
+  { id: "ta-IN", label: "Tamil" },
+  { id: "te-IN", label: "Telugu" },
+  { id: "ml-IN", label: "Malayalam" },
+  { id: "kn-IN", label: "Kannada" },
+  { id: "mr-IN", label: "Marathi" },
+  { id: "gu-IN", label: "Gujarati" },
+  { id: "pa-IN", label: "Punjabi" },
+  { id: "od-IN", label: "Odia" },
+] as const;
 
 // 13 metric fields, label + warn/error thresholds (ms). Thresholds match
 // the operator playbook in REPLIT.md ("acceptable: <800ms STT, <500ms LLM
@@ -137,10 +175,13 @@ export default function SimulatorPage() {
   // agent_settings.llmProviderId. Operator can opt into a specific provider
   // via the dropdown.
   const [llmProvider, setLlmProvider] = useState<string>("default");
-  // Voice + language are intentionally NOT overridable from the simulator.
-  // The agent uses whatever is configured in Settings → Agent so the test
-  // call matches what real leads will hear. (LLM provider stays overridable
-  // because Task #28's whole point is comparing providers side-by-side.)
+  // Voice + language are overridable so operators can A/B-listen to
+  // different Sarvam Bulbul voices and BCP-47 languages without editing
+  // Settings → Agent. "default" sends no override; server resolves from
+  // agent_settings. Language "default" also enables auto-detect: TTS will
+  // flip to hi-IN automatically whenever the reply contains Devanagari.
+  const [voice, setVoice] = useState<string>("default");
+  const [language, setLanguage] = useState<string>("default");
 
   const [starting, setStarting] = useState(false);
   const [session, setSession] = useState<SessionInfo | null>(null);
@@ -289,9 +330,12 @@ export default function SimulatorPage() {
           // dropdown on "Use global default" so server resolves from
           // agent_settings.llmProviderId.
           llmProviderOverride: effProvider === "default" ? undefined : effProvider,
-          // Voice + language are intentionally omitted — the server resolves
-          // both from agent_settings (Settings → Agent) so the simulator
-          // matches what real leads will hear.
+          // "default" → omit so server falls back to agent_settings. Any
+          // explicit voice is forwarded verbatim. Explicit language is also
+          // forwarded; omitting it lets the TTS layer auto-detect from the
+          // reply's script (Devanagari → hi-IN, else agent default).
+          voice: voice === "default" ? undefined : voice,
+          language: language === "default" ? undefined : language,
         }),
       });
       if (!startRes?.success) {
@@ -525,6 +569,28 @@ export default function SimulatorPage() {
                 <SelectContent>
                   {LLM_PROVIDERS.map((p) => (
                     <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label>Agent voice</Label>
+              <Select value={voice} onValueChange={setVoice} disabled={!!session}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {VOICE_OPTIONS.map((v) => (
+                    <SelectItem key={v.id} value={v.id}>{v.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label>Language</Label>
+              <Select value={language} onValueChange={setLanguage} disabled={!!session}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {LANGUAGE_OPTIONS.map((l) => (
+                    <SelectItem key={l.id} value={l.id}>{l.label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>

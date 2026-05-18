@@ -214,13 +214,42 @@ export function truncateForTTS(text: string, maxChars = TTS_MAX_CHARS): string {
  * Generate agent speech audio using Sarvam Bulbul v3 TTS.
  * Returns a WAV audio Buffer, or null on failure.
  */
+/**
+ * Auto-pick the TTS language code from the reply's actual script. Sarvam
+ * Bulbul pronounces text using the phoneme model for `target_language_code`
+ * — so a Hindi reply sent with `en-IN` comes out as a robotic, syllable-by-
+ * syllable English-phonetic mispronunciation. Devanagari in the text is a
+ * near-perfect signal of Hindi content; mixed scripts (Hinglish) also lean
+ * Hindi because the Hindi voice handles English loanwords gracefully but
+ * the English voice does NOT handle Devanagari at all.
+ *
+ * Returns the caller-supplied `fallback` (the agent's configured language)
+ * when the text is pure Latin — that keeps explicit operator choices like
+ * Bengali/Tamil/Telugu working as configured.
+ */
+export function detectTtsLanguage(text: string, fallback: string): string {
+  // Devanagari block U+0900-U+097F covers Hindi, Marathi, and Sanskrit.
+  if (/[\u0900-\u097F]/.test(text)) return "hi-IN";
+  return fallback;
+}
+
 export async function generateSpeech(
   text: string,
   cfg: AgentConfig,
-  overrides?: { voice?: string; language?: string },
+  overrides?: { voice?: string; language?: string; targetSampleRateHz?: number },
 ): Promise<Buffer | null> {
   const voice = overrides?.voice ?? cfg.voice;
-  const language = overrides?.language ?? cfg.language;
+  // Always run script-detection so a Hindi reply on an `en-IN` agent still
+  // sounds natural. Caller-supplied override still wins (e.g. simulator
+  // explicitly set to "ta-IN" should stay Tamil even on an English greeting).
+  const requestedLanguage = overrides?.language ?? cfg.language;
+  const language = overrides?.language
+    ? requestedLanguage  // explicit per-call override — respect it verbatim
+    : detectTtsLanguage(text, requestedLanguage);
+  // 8 kHz is telephony-native (Twilio/SIP); simulator passes 24000 for HD
+  // playback in the browser. Sarvam often ignores this hint and returns
+  // 22050/24000 anyway — the resampler downstream handles either case.
+  const targetSampleRateHz = overrides?.targetSampleRateHz ?? 8000;
   if (!config.sarvam.apiKey) {
     logger.warn("SARVAM_API_KEY not set — skipping TTS");
     return null;
@@ -252,7 +281,7 @@ export async function generateSpeech(
         speaker: voice,
         model: TTS_MODEL,
         enable_preprocessing: true,
-        target_sample_rate_hz: 8000,  // 8kHz WAV — standard telephony, compatible with Twilio <Play>
+        target_sample_rate_hz: targetSampleRateHz,
       }),
     });
 

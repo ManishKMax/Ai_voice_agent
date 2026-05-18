@@ -6,7 +6,7 @@ import { triggerCallForLead } from "./modules/calls/calls.service.js";
 import { resetStuckCallingLeads } from "./modules/leads/leads.service.js";
 import { loadAgentConfig } from "./config/agent.config.js";
 import { loadPlatformSettings } from "./config/platform.config.js";
-import { probeLiveKit } from "./services/livekit.service.js";
+import { probeLiveKit, probeSipOutboundTrunks } from "./services/livekit.service.js";
 import { attachMediaStreamServer } from "./websocket/media-stream.js";
 // Importing for side effects: registers the Phase-3 CallSession subscriber on
 // the Media Streams server so live WS calls (VOICE_PIPELINE=ws) get handled.
@@ -72,6 +72,7 @@ httpServer.listen(port, async () => {
   // SDK loaded and creds are present; the actual SFU connection is exercised
   // when the first simulator call comes in.
   void probeLiveKit();
+  void probeSipOutboundTrunks();
 });
 
 async function probeEnableThinking(): Promise<void> {

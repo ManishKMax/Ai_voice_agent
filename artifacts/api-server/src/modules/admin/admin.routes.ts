@@ -18,6 +18,50 @@ const router = Router();
 router.use(authMiddleware);
 router.use(requireRole("SUPER_ADMIN", "COMPANY_ADMIN"));
 
+/**
+ * POST /api/admin/tenants/:id/migrate-telephony { provider: "livekit"|"twilio"|"exotel" }
+ *
+ * Admin-only workflow to flip a tenant onto a different outbound transport.
+ * Phase 2 ships LiveKit SIP as the new default; pre-Phase-2 tenants are
+ * pinned to Twilio (NULL provider) until migrated here. The route only
+ * touches `telephony_provider` — credentials/trunk assignment are separate
+ * concerns handled via DB or the Settings UI.
+ *
+ * Audited: an audit_logs row is written so we can answer "who switched
+ * Tenant X onto LiveKit" later.
+ */
+router.post(
+  "/tenants/:id/migrate-telephony",
+  async (req, res, next): Promise<void> => {
+    try {
+      const id = parseInt(req.params["id"] as string, 10);
+      if (isNaN(id)) { res.status(400).json({ error: "Invalid tenant ID" }); return; }
+      const { provider } = req.body as { provider?: string };
+      if (!provider || !["livekit", "twilio", "exotel"].includes(provider)) {
+        res.status(400).json({ error: "provider must be 'livekit', 'twilio', or 'exotel'" });
+        return;
+      }
+      const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, id));
+      if (!tenant) { res.status(404).json({ error: "Tenant not found" }); return; }
+      const previous = tenant.telephonyProvider ?? null;
+      await db.update(tenantsTable)
+        .set({ telephonyProvider: provider, updatedAt: new Date() })
+        .where(eq(tenantsTable.id, id));
+      const actorId = (req as AuthRequest).userId;
+      await createAuditLog({
+        ...(actorId !== undefined ? { userId: actorId } : {}),
+        action: "tenant.migrate_telephony",
+        targetType: "tenant",
+        targetId: id,
+        metadata: { from: previous, to: provider },
+      });
+      res.json({ success: true, tenantId: id, previous, current: provider });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 router.get("/tenants", async (_req, res, next): Promise<void> => {
   try {
     const tenants = await listTenantsWithKyc();

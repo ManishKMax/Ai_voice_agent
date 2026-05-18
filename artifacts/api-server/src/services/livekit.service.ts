@@ -169,6 +169,55 @@ export interface DialSipParticipantResult {
   roomName: string;
 }
 
+/**
+ * Boot-time probe: list outbound SIP trunks against LiveKit Cloud. This is
+ * a free read-only call (no DID minutes consumed) that verifies (a) the
+ * project credentials are valid, (b) the SIP add-on is enabled on the
+ * project, and (c) — if `LIVEKIT_SIP_TRUNK_ID` is set — that the configured
+ * trunk actually exists in the account. Failures are warnings, not fatal,
+ * so a misconfigured project doesn't block API server boot.
+ */
+export async function probeSipOutboundTrunks(): Promise<void> {
+  const creds = getLiveKitCreds();
+  if (!creds) {
+    logger.info("livekit_sip_probe_skipped reason=no_creds");
+    return;
+  }
+  const defaults = getLiveKitSipDefaults();
+  if (!defaults.trunkId && !process.env["LIVEKIT_SIP_TRUNK_ALLOWLIST"]) {
+    logger.info("livekit_sip_probe_skipped reason=no_trunk_configured");
+    return;
+  }
+  try {
+    const httpUrl = toHttpUrl(creds.url);
+    const client = new SipClient(httpUrl, creds.apiKey, creds.apiSecret);
+    const trunks = await client.listSipOutboundTrunk();
+    const ids = trunks
+      .map((t) => (t as { sipTrunkId?: string; sip_trunk_id?: string }).sipTrunkId
+                  ?? (t as { sip_trunk_id?: string }).sip_trunk_id
+                  ?? null)
+      .filter((x): x is string => !!x);
+    const allowed = getAllowedSipTrunks();
+    const missing = [...allowed].filter((id) => !ids.includes(id));
+    if (missing.length > 0) {
+      logger.warn(
+        { configured: [...allowed], found: ids, missing },
+        "livekit_sip_probe_trunk_missing",
+      );
+    } else {
+      logger.info(
+        { trunkCount: ids.length, allowedCount: allowed.size },
+        "livekit_sip_probe_ok",
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      { err: (err as Error).message },
+      "livekit_sip_probe_failed",
+    );
+  }
+}
+
 export async function dialSipParticipant(
   opts: DialSipParticipantOptions,
 ): Promise<DialSipParticipantResult> {

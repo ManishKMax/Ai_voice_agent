@@ -312,7 +312,8 @@ returns participantIdentity (string) → written to calls.twilio_call_sid
 LiveKit Cloud webhook → POST /api/livekit/webhook
   ├─ participant_joined  (identity starts sip-lead-*) → handleCallStatusUpdate("answered")
   ├─ participant_left                                  → handleCallStatusUpdate("completed")
-  └─ participant_connection_aborted                    → handleCallStatusUpdate("completed")
+  └─ participant_connection_aborted                    → handleCallStatusUpdate("no-answer")
+                                                          (triggers retry, unlike "completed")
 ```
 
 Env vars (platform-wide defaults):

@@ -783,7 +783,7 @@ export class CallSession {
     // provider's `firstTokenMs` will be honoured here.
     const sttFinalAtMs = performance.now();
     const llmRequestSentAtMs = performance.now();
-    const { text: agentText, shouldEnd, chatMs, chatModel, chatProvider, completionTokens } =
+    const { text: agentText, shouldEnd, chatMs, chatModel, chatProvider, completionTokens, firstTokenMs: providerFirstTokenMs } =
       await generateConversationResponse(
         sessionState.messages,
         transcript,
@@ -824,8 +824,11 @@ export class CallSession {
     try {
       const sttLatencyMs = Math.max(0, Math.round(sttFinalAtMs - turnStartMs));
       const llmLatencyMs = Math.max(0, Math.round(llmCompleteAtMs - llmRequestSentAtMs));
-      // firstTokenMs synthetic for non-streaming providers (task #29 spec).
-      const llmFirstTokenMs = llmLatencyMs;
+      // Honour the provider's reported first-token timing when available
+      // (streaming providers); fall back to full LLM latency for
+      // non-streaming providers (synthetic, per task #29 spec).
+      const llmFirstTokenMs =
+        providerFirstTokenMs != null ? Math.max(0, Math.round(providerFirstTokenMs)) : llmLatencyMs;
       // tokens/sec computed from output tokens & elapsed seconds; null when
       // the provider didn't return usage (Sarvam currently).
       const llmTokensPerSec =
@@ -885,7 +888,7 @@ export class CallSession {
           llm_model: chatModel,
           ...metricsBlock,
         },
-        "call_session_turn_metrics",
+        "call_session_turn",
       );
 
       // Resolve the DB call id from the Twilio call SID and persist.

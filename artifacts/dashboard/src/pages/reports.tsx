@@ -46,15 +46,18 @@ interface LatencyBucket {
 }
 
 const LATENCY_METRICS: { key: string; label: string; unit: string }[] = [
-  { key: "total_roundtrip_ms",   label: "Total roundtrip",  unit: "ms" },
-  { key: "stt_latency_ms",       label: "STT latency",      unit: "ms" },
-  { key: "llm_latency_ms",       label: "LLM latency",      unit: "ms" },
-  { key: "llm_first_token_ms",   label: "LLM first token",  unit: "ms" },
-  { key: "first_word_trigger_ms",label: "First word trigger", unit: "ms" },
-  { key: "tts_stream_start_ms",  label: "TTS stream start", unit: "ms" },
-  { key: "first_playback_ms",    label: "First playback",   unit: "ms" },
-  { key: "tts_complete_ms",      label: "TTS complete",     unit: "ms" },
-  { key: "tts_latency_ms",       label: "TTS latency",      unit: "ms" },
+  { key: "total_roundtrip_ms",    label: "Total roundtrip",   unit: "ms" },
+  { key: "stt_latency_ms",        label: "STT latency",       unit: "ms" },
+  { key: "llm_latency_ms",        label: "LLM latency",       unit: "ms" },
+  { key: "llm_first_token_ms",    label: "LLM first token",   unit: "ms" },
+  { key: "first_word_trigger_ms", label: "First word trigger",unit: "ms" },
+  { key: "tts_stream_start_ms",   label: "TTS stream start",  unit: "ms" },
+  { key: "first_playback_ms",     label: "First playback",    unit: "ms" },
+  { key: "first_audio_chunk_ms",  label: "First audio chunk", unit: "ms" },
+  { key: "tts_complete_ms",       label: "TTS complete",      unit: "ms" },
+  { key: "tts_latency_ms",        label: "TTS latency",       unit: "ms" },
+  { key: "livekit_transport_ms",  label: "LiveKit transport", unit: "ms" },
+  { key: "llm_tokens_per_sec",    label: "LLM tokens/sec",    unit: "t/s" },
 ];
 
 const PROVIDER_COLORS: Record<string, string> = {
@@ -141,7 +144,10 @@ function LatencyWidget() {
               const key = String(b.bucket);
               if (!byBucket.has(key)) byBucket.set(key, { bucket: key });
               const row = byBucket.get(key)!;
-              const v = b[`${m.key}_${percentile}`];
+              // tokens/sec is averaged (no percentile); everything else
+              // uses the selected percentile suffix.
+              const suffix = m.key === "llm_tokens_per_sec" ? "_avg" : `_${percentile}`;
+              const v = b[`${m.key}${suffix}`];
               if (v != null) row[b.provider_id] = Math.round(Number(v));
             }
             const series = Array.from(byBucket.values()).sort((a, b) =>
@@ -149,7 +155,7 @@ function LatencyWidget() {
             );
             return (
               <div key={m.key} className="border rounded p-3 space-y-1">
-                <p className="text-xs font-medium">{m.label} <span className="text-muted-foreground font-normal">{percentile}</span></p>
+                <p className="text-xs font-medium">{m.label} <span className="text-muted-foreground font-normal">{m.key === "llm_tokens_per_sec" ? "avg" : percentile}</span></p>
                 <ResponsiveContainer width="100%" height={120}>
                   <LineChart data={series} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
                     <XAxis dataKey="bucket" tick={{ fontSize: 9 }} tickFormatter={(v) => String(v).slice(5, 10)} />

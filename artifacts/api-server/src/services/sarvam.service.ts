@@ -237,6 +237,11 @@ export interface ChatResult {
   chatProvider: LlmProviderId;
   /** Completion tokens returned by the provider, when available. Used for tokens/sec metric. */
   completionTokens?: number;
+  /**
+   * Provider-reported time-to-first-token in ms. Non-streaming providers
+   * report null; CallSession then falls back to chatMs (synthetic).
+   */
+  firstTokenMs?: number | null;
 }
 
 export interface GenerateConversationOptions {
@@ -301,6 +306,7 @@ export async function generateConversationResponse(
           chatModel: fb.model,
           chatProvider: fb.providerId,
           completionTokens: fb.usage?.completionTokens,
+          firstTokenMs: fb.firstTokenMs,
         };
       }
     }
@@ -332,6 +338,7 @@ export async function generateConversationResponse(
       chatModel: primary.model,
       chatProvider: primary.providerId,
       completionTokens: primary.usage?.completionTokens,
+      firstTokenMs: primary.firstTokenMs,
     };
   }
 
@@ -361,6 +368,7 @@ export async function generateConversationResponse(
         chatModel: fb.model,
         chatProvider: fb.providerId,
         completionTokens: fb.usage?.completionTokens,
+        firstTokenMs: fb.firstTokenMs,
       };
     }
   }

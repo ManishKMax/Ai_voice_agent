@@ -193,9 +193,16 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
     // response (TwiML for Twilio, app-bazaar XML for Exotel, etc.).
     // resolveProviderForLead falls back to Twilio for unknown tenants.
     const provider = await resolveProviderForLead(leadId);
-    const { contentType, body } = provider.generateConnectResponse(leadId || undefined);
+    // Task #28: forward per-call llmProvider override (set by simulator
+    // on the voice URL query string) into the stream's customParameters,
+    // where CallSession picks it up.
+    const llmProvider = typeof req.query["llmProvider"] === "string"
+      ? (req.query["llmProvider"] as string)
+      : undefined;
+    const extra = llmProvider ? { llmProvider } : undefined;
+    const { contentType, body } = provider.generateConnectResponse(leadId || undefined, extra);
     req.log.info(
-      { leadId, callSid, pipeline, providerId: provider.id },
+      { leadId, callSid, pipeline, providerId: provider.id, llmProvider },
       "Voice webhook — routing to WS pipeline",
     );
     res.setHeader("Content-Type", contentType);

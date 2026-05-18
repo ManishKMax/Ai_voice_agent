@@ -126,6 +126,6 @@ export const openaiLlmProvider: LlmProvider = makeOpenAiCompatibleProvider({
 export const groqLlmProvider: LlmProvider = makeOpenAiCompatibleProvider({
   id: "groq",
   label: "Groq",
-  defaultModel: "llama-3.1-8b-instant",
+  defaultModel: "llama-3.3-70b-versatile",
   baseUrl: "https://api.groq.com/openai/v1",
 });

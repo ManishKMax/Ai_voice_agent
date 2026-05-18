@@ -142,10 +142,13 @@ export class TwilioMediaStreamsProvider implements IvrProvider {
 
   // ── Webhook ──────────────────────────────────────────────────────────────
 
-  generateConnectResponse(leadId: number | undefined): { contentType: string; body: string } {
+  generateConnectResponse(
+    leadId: number | undefined,
+    extraParameters?: Record<string, string>,
+  ): { contentType: string; body: string } {
     return {
       contentType: "text/xml",
-      body: generateMediaStreamTwiML(leadId),
+      body: generateMediaStreamTwiML(leadId, extraParameters),
     };
   }
 }

@@ -168,7 +168,10 @@ export class ExotelMediaStreamsProvider implements IvrProvider {
 
   // ── Webhook ──────────────────────────────────────────────────────────────
 
-  generateConnectResponse(leadId: number | undefined): { contentType: string; body: string } {
+  generateConnectResponse(
+    leadId: number | undefined,
+    extraParameters?: Record<string, string>,
+  ): { contentType: string; body: string } {
     // TODO(exotel): the exact tag name and attributes are determined by the
     // customer's Exotel App SID flow. Live testing MUST replace this with
     // the verified format from a real Exotel account before Exotel calls
@@ -177,11 +180,17 @@ export class ExotelMediaStreamsProvider implements IvrProvider {
       .replace(/^https:/i, "wss:")
       .replace(/^http:/i, "ws:");
     const streamUrl = `${wsBase}/api/voice/stream`;
-    const leadParam = leadId ? `<Parameter name="leadId" value="${leadId}"/>` : "";
+    const params: string[] = [];
+    if (leadId) params.push(`<Parameter name="leadId" value="${leadId}"/>`);
+    if (extraParameters) {
+      for (const [k, v] of Object.entries(extraParameters)) {
+        if (v) params.push(`<Parameter name="${k}" value="${v}"/>`);
+      }
+    }
     const body = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <!-- TODO(exotel): replace <Voicebot> with the verified Exotel applet tag -->
-  <Voicebot url="${streamUrl}">${leadParam}</Voicebot>
+  <Voicebot url="${streamUrl}">${params.join("")}</Voicebot>
 </Response>`;
     logger.warn(
       { leadId, providerId: this.id },

@@ -327,6 +327,59 @@ export async function deleteApiKey(req: Request, res: Response, next: NextFuncti
   }
 }
 
+// ── Telephony settings (Twilio) ──────────────────────────────────────────
+//
+// Task #28: explicit /settings/telephony endpoints so the env-var-prompt
+// workflow can be retired. These are thin views over the same underlying
+// platform_settings.twilio* fields used by /settings + /settings/test-twilio
+// — kept separate to give the Settings UI a focused REST surface.
+
+export async function getTelephonySettings(_req: Request, res: Response, next: NextFunction) {
+  try {
+    res.json({
+      success: true,
+      data: {
+        provider: "twilio",
+        twilioAccountSid: platformSettings.twilioAccountSid
+          ? maskKey(platformSettings.twilioAccountSid)
+          : "",
+        twilioAuthTokenMasked: maskKey(platformSettings.twilioAuthToken),
+        twilioPhoneNumber: platformSettings.twilioPhoneNumber ?? "",
+        configured: !!(platformSettings.twilioAccountSid && platformSettings.twilioAuthToken),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function patchTelephonySettings(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { twilioAccountSid, twilioAuthToken, twilioPhoneNumber } = req.body as {
+      twilioAccountSid?: string;
+      twilioAuthToken?: string;
+      twilioPhoneNumber?: string;
+    };
+    const patch: Parameters<typeof updatePlatformSettings>[0] = {};
+    if (typeof twilioAccountSid === "string" && twilioAccountSid !== "") patch.twilioAccountSid = twilioAccountSid;
+    if (typeof twilioAuthToken === "string" && twilioAuthToken !== "") patch.twilioAuthToken = twilioAuthToken;
+    if (typeof twilioPhoneNumber === "string") patch.twilioPhoneNumber = twilioPhoneNumber;
+    await updatePlatformSettings(patch);
+    res.json({
+      success: true,
+      data: {
+        provider: "twilio",
+        twilioAccountSid: maskKey(platformSettings.twilioAccountSid),
+        twilioAuthTokenMasked: maskKey(platformSettings.twilioAuthToken),
+        twilioPhoneNumber: platformSettings.twilioPhoneNumber ?? "",
+        configured: !!(platformSettings.twilioAccountSid && platformSettings.twilioAuthToken),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ── LLM Provider settings ────────────────────────────────────────────────
 
 function buildLlmSettingsView() {

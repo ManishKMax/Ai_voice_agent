@@ -16,6 +16,8 @@ import {
   getLlmSettings,
   patchLlmSettings,
   testLlmProvider,
+  getTelephonySettings,
+  patchTelephonySettings,
 } from "./settings.controller.js";
 
 const router = Router();
@@ -37,5 +39,9 @@ router.delete("/settings/api-keys/:keyId", requireAuth, deleteApiKey);
 router.get("/settings/llm", requireAuth, getLlmSettings);
 router.patch("/settings/llm", requireAuth, patchLlmSettings);
 router.post("/settings/llm/test", requireAuth, testLlmProvider);
+
+router.get("/settings/telephony", requireAuth, getTelephonySettings);
+router.patch("/settings/telephony", requireAuth, patchTelephonySettings);
+router.post("/settings/telephony/test", requireAuth, testTwilio);
 
 export default router;

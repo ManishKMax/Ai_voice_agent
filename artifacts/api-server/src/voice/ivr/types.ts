@@ -112,5 +112,8 @@ export interface IvrProvider {
    * call to our Media Streams WebSocket. Receives the leadId so it can be
    * forwarded as a custom parameter on the stream.
    */
-  generateConnectResponse(leadId: number | undefined): { contentType: string; body: string };
+  generateConnectResponse(
+    leadId: number | undefined,
+    extraParameters?: Record<string, string>,
+  ): { contentType: string; body: string };
 }

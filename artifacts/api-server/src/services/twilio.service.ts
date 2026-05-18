@@ -27,17 +27,26 @@ function getClient(creds?: TwilioCredentials) {
   return _client;
 }
 
+export interface InitiateCallOptions {
+  /** Per-call LLM provider override (forwarded to /api/voice as query). */
+  llmProviderOverride?: string;
+}
+
 export async function initiateCall(
   toPhone: string,
   leadId: number,
   creds?: TwilioCredentials,
+  options: InitiateCallOptions = {},
 ): Promise<string> {
   const fromNumber = creds?.phoneNumber || config.twilio.phoneNumber;
   if (!fromNumber) {
     throw new Error("TWILIO_PHONE_NUMBER is not configured");
   }
 
-  const voiceUrl = `${config.baseUrl}/api/voice?leadId=${leadId}`;
+  const llmQs = options.llmProviderOverride
+    ? `&llmProvider=${encodeURIComponent(options.llmProviderOverride)}`
+    : "";
+  const voiceUrl = `${config.baseUrl}/api/voice?leadId=${leadId}${llmQs}`;
   const statusCallbackUrl = `${config.baseUrl}/api/call-status?leadId=${leadId}`;
 
   logger.info(
@@ -154,16 +163,23 @@ export function generateEndCallTwiML(audioId: string): string {
  * traffic. The optional `leadId` is forwarded as a custom <Parameter/> so the
  * downstream WS subscriber can correlate the audio stream to the lead.
  */
-export function generateMediaStreamTwiML(leadId?: number): string {
+export function generateMediaStreamTwiML(
+  leadId?: number,
+  extraParameters?: Record<string, string>,
+): string {
   const wsBase = config.baseUrl.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:");
   const streamUrl = `${wsBase}/api/voice/stream`;
-  const leadParam = leadId
-    ? `<Parameter name="leadId" value="${leadId}"/>`
-    : "";
+  const params: string[] = [];
+  if (leadId) params.push(`<Parameter name="leadId" value="${leadId}"/>`);
+  if (extraParameters) {
+    for (const [k, v] of Object.entries(extraParameters)) {
+      if (v) params.push(`<Parameter name="${escapeXml(k)}" value="${escapeXml(v)}"/>`);
+    }
+  }
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${streamUrl}">${leadParam}</Stream>
+    <Stream url="${streamUrl}">${params.join("")}</Stream>
   </Connect>
 </Response>`;
 }

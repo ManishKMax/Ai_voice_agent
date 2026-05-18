@@ -24,7 +24,8 @@ A production-ready AI-powered outbound call system with two products:
 - **Voice**: Twilio Programmable Voice (Gather + Play)
 - **AI TTS**: Sarvam AI Bulbul v3 (`bulbul:v3`) — Indian-accent voice synthesis
 - **AI STT**: Twilio built-in speech recognition (Gather input="speech")
-- **AI Chat**: Sarvam AI `sarvam-m` (24B, ~1-2s, default for live conversation) + `sarvam-105b` (post-call analysis). Override via `SARVAM_CHAT_MODEL` / `SARVAM_ANALYSIS_MODEL`.
+- **AI Chat (pluggable)**: Live conversation LLM is selectable per-deployment from the Settings UI — Sarvam-M (default, ~1-2s), Groq Llama-3.3-70B (fastest non-Sarvam), OpenAI GPT-4o-mini, or Google Gemini 2.0 Flash. Per-call override is supported via `customParameters.llmProvider` on the MediaStream start envelope (used by the Call Simulator). Post-call analysis remains on `sarvam-105b`.
+- **Credentials policy**: All third-party credentials (LLM keys, Twilio creds, Sarvam keys, SMTP, webhook secret) are managed from the dashboard Settings page. The env-var-prompt workflow is deprecated for new credentials — env vars are still honoured as a fallback for first-boot bootstrap only.
 - **Frontend**: React + Vite + TailwindCSS + shadcn/ui
 
 ## Artifacts
@@ -153,6 +154,19 @@ Call ends → transcript saved → Sarvam AI analysis runs
 - `POST /api/call-status` — Twilio call status webhook
 - `GET /api/calls` — list calls
 - `GET /api/calls/:id` — single call
+
+### Settings (JWT, admin) — Task #28
+- `GET/PATCH /api/settings/llm` — list providers (Sarvam / Groq / OpenAI / Gemini) with masked keys; save active provider + per-provider apiKey/model. Empty apiKey in PATCH leaves the stored secret untouched.
+- `POST /api/settings/llm/test` — `{ providerId, apiKey?, model? }` → 1-token hello-world chat; returns latency + model echo.
+- `GET/PATCH /api/settings/telephony` — Twilio Account SID / Auth Token / Phone Number (masked in responses). Mirrors LLM card UX.
+- `POST /api/settings/telephony/test` — live Twilio credential validation (alias of `/api/settings/test-twilio`).
+
+Live conversation provider precedence (in `resolveLlm`):
+1. Per-call `customParameters.llmProvider` override (simulator only).
+2. `agent_settings.config.llmProviderId`.
+3. Default: `sarvam`.
+
+Fallback: if the active non-Sarvam provider has no key, or returns empty, the system falls back to Sarvam-M (using the platform Sarvam key) for that turn so live calls never hang.
 
 ### Admin (JWT, COMPANY_ADMIN/SUPER_ADMIN)
 - `GET/POST/PATCH/DELETE /api/admin/users` — user CRUD with role + active toggle

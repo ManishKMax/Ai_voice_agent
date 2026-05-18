@@ -15,10 +15,11 @@ async function dispatchCall(
   toPhone: string,
   leadId: number,
   tenantId: number | null,
+  options: { llmProviderOverride?: string } = {},
 ): Promise<string> {
   // Platform-level call (admin dashboard, no tenant) — uses platform Twilio creds
   if (!tenantId) {
-    return initiateCall(toPhone, leadId);
+    return initiateCall(toPhone, leadId, undefined, { llmProviderOverride: options.llmProviderOverride });
   }
 
   // Tenant-level call — load tenant creds and route by provider
@@ -30,7 +31,7 @@ async function dispatchCall(
 
   if (!tenant) {
     logger.warn({ tenantId, leadId }, "Tenant not found, falling back to platform Twilio");
-    return initiateCall(toPhone, leadId);
+    return initiateCall(toPhone, leadId, undefined, { llmProviderOverride: options.llmProviderOverride });
   }
 
   const provider = tenant.telephonyProvider ?? "twilio";
@@ -49,17 +50,25 @@ async function dispatchCall(
 
   // Twilio path: per-tenant creds if available, else platform fallback
   if (tenant.twilioAccountSid && tenant.twilioAuthToken && tenant.twilioPhoneNumber) {
-    return initiateCall(toPhone, leadId, {
-      accountSid: tenant.twilioAccountSid,
-      authToken: tenant.twilioAuthToken,
-      phoneNumber: tenant.twilioPhoneNumber,
-    });
+    return initiateCall(
+      toPhone,
+      leadId,
+      {
+        accountSid: tenant.twilioAccountSid,
+        authToken: tenant.twilioAuthToken,
+        phoneNumber: tenant.twilioPhoneNumber,
+      },
+      { llmProviderOverride: options.llmProviderOverride },
+    );
   }
 
-  return initiateCall(toPhone, leadId);
+  return initiateCall(toPhone, leadId, undefined, { llmProviderOverride: options.llmProviderOverride });
 }
 
-export async function triggerCallForLead(leadId: number): Promise<void> {
+export async function triggerCallForLead(
+  leadId: number,
+  options: { llmProviderOverride?: string } = {},
+): Promise<void> {
   const [lead] = await db
     .select()
     .from(leadsTable)
@@ -124,7 +133,9 @@ export async function triggerCallForLead(leadId: number): Promise<void> {
   logger.info({ leadId }, "Greeting TTS started in background");
 
   try {
-    const callSid = await dispatchCall(lead.phone, leadId, lead.tenantId ?? null);
+    const callSid = await dispatchCall(lead.phone, leadId, lead.tenantId ?? null, {
+      llmProviderOverride: options.llmProviderOverride,
+    });
     await db
       .update(callsTable)
       .set({ twilioCallSid: callSid, updatedAt: new Date() })

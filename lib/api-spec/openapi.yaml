@@ -509,6 +509,134 @@ paths:
               schema:
                 $ref: "#/components/schemas/AnalyzeCallResponse"
 
+  # ── Settings: LLM provider (Task #28) ──────────────────────────────────
+  /settings/llm:
+    get:
+      operationId: getLlmSettings
+      tags: [settings]
+      summary: Get LLM providers (with masked API keys) and active provider id
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: LLM settings view
+          content:
+            application/json:
+              schema:
+                type: object
+    patch:
+      operationId: patchLlmSettings
+      tags: [settings]
+      summary: Save active LLM provider + per-provider credentials
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                activeProviderId:
+                  type: string
+                credentials:
+                  type: object
+                  additionalProperties:
+                    type: object
+                    properties:
+                      apiKey: { type: string }
+                      model: { type: string }
+      responses:
+        "200":
+          description: Updated LLM settings view
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /settings/llm/test:
+    post:
+      operationId: testLlmProvider
+      tags: [settings]
+      summary: Smoke-test an LLM provider (1-token hello-world chat)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [providerId]
+              properties:
+                providerId: { type: string }
+                apiKey: { type: string }
+                model: { type: string }
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # ── Settings: Telephony (Task #28) ─────────────────────────────────────
+  /settings/telephony:
+    get:
+      operationId: getTelephonySettings
+      tags: [settings]
+      summary: Get telephony (Twilio) credentials with masked tokens
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Telephony settings view
+          content:
+            application/json:
+              schema:
+                type: object
+    patch:
+      operationId: patchTelephonySettings
+      tags: [settings]
+      summary: Update Twilio credentials. Empty fields preserve the stored value.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                twilioAccountSid: { type: string }
+                twilioAuthToken: { type: string }
+                twilioPhoneNumber: { type: string }
+      responses:
+        "200":
+          description: Updated telephony settings view
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /settings/telephony/test:
+    post:
+      operationId: testTelephonyProvider
+      tags: [settings]
+      summary: Live-validate Twilio credentials (alias of /settings/test-twilio)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                twilioAccountSid: { type: string }
+                twilioAuthToken: { type: string }
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema:
+                type: object
+
 components:
   securitySchemes:
     bearerAuth:

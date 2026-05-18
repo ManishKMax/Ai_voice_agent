@@ -573,3 +573,63 @@ export const AnalyzeCallResponse = zod.object({
   message: zod.string(),
   callId: zod.number(),
 });
+
+/**
+ * @summary Get LLM providers (with masked API keys) and active provider id
+ */
+export const GetLlmSettingsResponse = zod.object({}).passthrough();
+
+/**
+ * @summary Save active LLM provider + per-provider credentials
+ */
+export const PatchLlmSettingsBody = zod.object({
+  activeProviderId: zod.string().optional(),
+  credentials: zod
+    .record(
+      zod.string(),
+      zod.object({
+        apiKey: zod.string().optional(),
+        model: zod.string().optional(),
+      }),
+    )
+    .optional(),
+});
+
+export const PatchLlmSettingsResponse = zod.object({}).passthrough();
+
+/**
+ * @summary Smoke-test an LLM provider (1-token hello-world chat)
+ */
+export const TestLlmProviderBody = zod.object({
+  providerId: zod.string(),
+  apiKey: zod.string().optional(),
+  model: zod.string().optional(),
+});
+
+export const TestLlmProviderResponse = zod.object({}).passthrough();
+
+/**
+ * @summary Get telephony (Twilio) credentials with masked tokens
+ */
+export const GetTelephonySettingsResponse = zod.object({}).passthrough();
+
+/**
+ * @summary Update Twilio credentials. Empty fields preserve the stored value.
+ */
+export const PatchTelephonySettingsBody = zod.object({
+  twilioAccountSid: zod.string().optional(),
+  twilioAuthToken: zod.string().optional(),
+  twilioPhoneNumber: zod.string().optional(),
+});
+
+export const PatchTelephonySettingsResponse = zod.object({}).passthrough();
+
+/**
+ * @summary Live-validate Twilio credentials (alias of /settings/test-twilio)
+ */
+export const TestTelephonyProviderBody = zod.object({
+  twilioAccountSid: zod.string().optional(),
+  twilioAuthToken: zod.string().optional(),
+});
+
+export const TestTelephonyProviderResponse = zod.object({}).passthrough();

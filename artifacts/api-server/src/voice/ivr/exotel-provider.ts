@@ -184,7 +184,7 @@ export class ExotelMediaStreamsProvider implements IvrProvider {
     if (leadId) params.push(`<Parameter name="leadId" value="${leadId}"/>`);
     if (extraParameters) {
       for (const [k, v] of Object.entries(extraParameters)) {
-        if (v) params.push(`<Parameter name="${k}" value="${v}"/>`);
+        if (v) params.push(`<Parameter name="${escapeXml(k)}" value="${escapeXml(v)}"/>`);
       }
     }
     const body = `<?xml version="1.0" encoding="UTF-8"?>
@@ -202,6 +202,15 @@ export class ExotelMediaStreamsProvider implements IvrProvider {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
+}
+
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
 function pickString(rec: Record<string, unknown>, keys: string[]): string | null {

@@ -378,7 +378,7 @@ export default function Settings() {
   async function handleTestTwilio() {
     setTwilioStatus("testing");
     setTwilioMessage("");
-    const res = await apiFetch("/api/settings/test-twilio", {
+    const res = await apiFetch("/api/settings/telephony/test", {
       method: "POST",
       body: JSON.stringify({
         twilioAccountSid: form.twilioAccountSid || undefined,

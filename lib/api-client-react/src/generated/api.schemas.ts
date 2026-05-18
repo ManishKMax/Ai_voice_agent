@@ -284,3 +284,44 @@ export type GetCallsParams = {
   limit?: number;
   offset?: number;
 };
+
+export type GetLlmSettings200 = { [key: string]: unknown };
+
+export type PatchLlmSettingsBodyCredentials = {
+  [key: string]: {
+    apiKey?: string;
+    model?: string;
+  };
+};
+
+export type PatchLlmSettingsBody = {
+  activeProviderId?: string;
+  credentials?: PatchLlmSettingsBodyCredentials;
+};
+
+export type PatchLlmSettings200 = { [key: string]: unknown };
+
+export type TestLlmProviderBody = {
+  providerId: string;
+  apiKey?: string;
+  model?: string;
+};
+
+export type TestLlmProvider200 = { [key: string]: unknown };
+
+export type GetTelephonySettings200 = { [key: string]: unknown };
+
+export type PatchTelephonySettingsBody = {
+  twilioAccountSid?: string;
+  twilioAuthToken?: string;
+  twilioPhoneNumber?: string;
+};
+
+export type PatchTelephonySettings200 = { [key: string]: unknown };
+
+export type TestTelephonyProviderBody = {
+  twilioAccountSid?: string;
+  twilioAuthToken?: string;
+};
+
+export type TestTelephonyProvider200 = { [key: string]: unknown };

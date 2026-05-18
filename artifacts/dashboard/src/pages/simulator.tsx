@@ -54,14 +54,16 @@ const LLM_PROVIDERS = [
 // internal A/B listens. Default = shreya (warm + soft, the most
 // conversational of the list for sales-style outbound calls).
 const VOICE_OPTIONS = [
-  // Best for Hinglish — top of the list on purpose.
-  { id: "shreya",   label: "Shreya — soft, conversational ★ (default)" },
+  // Default = inherit from Settings → Agent. Listed first so the
+  // dropdown opens on the right answer for most operators.
+  { id: "default",  label: "Use Agent Settings voice (default)" },
+  // Best for Hinglish — curated A/B-test shortlist.
+  { id: "shreya",   label: "Shreya — soft, conversational ★" },
   { id: "neha",     label: "Neha — bright, friendly ★" },
   { id: "kavya",    label: "Kavya — calm, professional ★" },
   { id: "simran",   label: "Simran — natural Hinglish ★" },
   { id: "rohan",    label: "Rohan — natural male ★" },
   { id: "kabir",    label: "Kabir — deep, calm male ★" },
-  { id: "default",  label: "Use Agent default" },
   // Female (alternates)
   { id: "priya",    label: "Priya — warm" },
   { id: "pooja",    label: "Pooja — confident" },
@@ -99,8 +101,8 @@ const VOICE_OPTIONS = [
 // to hi-IN whenever the reply contains Devanagari, but Hinglish written
 // in Latin script ("Aapka time hai kya?") stays on whatever you pick.
 const LANGUAGE_OPTIONS = [
+  { id: "default", label: "Use Agent Settings language (default)" },
   { id: "hi-IN", label: "Hindi (best for Hinglish) ★" },
-  { id: "default", label: "Auto-detect from reply script" },
   { id: "en-IN", label: "English (India)" },
   { id: "bn-IN", label: "Bengali" },
   { id: "ta-IN", label: "Tamil" },
@@ -207,15 +209,14 @@ export default function SimulatorPage() {
   const [llmProvider, setLlmProvider] = useState<string>("default");
   // Voice + language are overridable so operators can A/B-listen to
   // different Sarvam Bulbul voices and BCP-47 languages without editing
-  // Settings → Agent. "default" sends no override; server resolves from
-  // agent_settings. Language "default" also enables auto-detect: TTS will
-  // flip to hi-IN automatically whenever the reply contains Devanagari.
-  // Default voice/language are tuned for Hinglish — see VOICE_OPTIONS /
-  // LANGUAGE_OPTIONS for rationale. Operator can still pick anything else.
-  // (shreya is verified-real in Bulbul v3; earlier attempt at "manisha"
-  // crashed TTS with 400 because that voice isn't in Sarvam's catalog.)
-  const [voice, setVoice] = useState<string>("shreya");
-  const [language, setLanguage] = useState<string>("hi-IN");
+  // Settings → Agent. Default = "default" (no override sent) so the
+  // simulator INHERITS whatever the user configured in Settings → Agent
+  // — picking a specific voice here is opt-in for A/B testing only.
+  // Earlier defaults hardcoded "shreya"/"hi-IN" which silently overrode
+  // saved agent settings; users were confused why their chosen voice
+  // wasn't being used.
+  const [voice, setVoice] = useState<string>("default");
+  const [language, setLanguage] = useState<string>("default");
 
   const [starting, setStarting] = useState(false);
   const [session, setSession] = useState<SessionInfo | null>(null);

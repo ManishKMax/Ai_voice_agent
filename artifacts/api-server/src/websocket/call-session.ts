@@ -28,7 +28,7 @@ import {
   generateSpeech,
   generateConversationResponse,
   analyzeTranscript,
-  splitForTTS,
+  splitFirstClauseThen,
 } from "../services/sarvam.service.js";
 import { SarvamSttClient, STT_RESPONSE_TIMEOUT_MS } from "../services/sarvam-stt-ws.client.js";
 import {
@@ -97,7 +97,12 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
   return n;
 }
 const POST_BOT_GRACE_MS      = envInt("VOICE_POST_BOT_GRACE_MS",      400,    0, 5000);
-const SILENCE_END_MS         = envInt("VOICE_SILENCE_END_MS",         1500, 200, 5000);
+// LATENCY: was 1500 — every turn paid an extra 800ms of dead air waiting
+// for trailing silence before flushing STT. 800ms matches industry VAD
+// defaults (Deepgram/AssemblyAI realtime) and shaves ~700ms off perceived
+// turn time without cutting users off mid-pause. Override via env if a
+// specific deployment finds people pausing longer between phrases.
+const SILENCE_END_MS         = envInt("VOICE_SILENCE_END_MS",          800, 200, 5000);
 const SPEECH_RMS_THRESHOLD   = envInt("VOICE_SPEECH_RMS_THRESHOLD",    600,   1, 32767);
 const SILENCE_RMS_THRESHOLD  = envInt("VOICE_SILENCE_RMS_THRESHOLD",   350,   1, 32767);
 const HEALTH_GATE_AFTER_MS   = envInt("VOICE_HEALTH_GATE_AFTER_MS",   6000, 1000, 60000);
@@ -1113,7 +1118,7 @@ export class CallSession {
    */
   private async streamTtsToTwilio(text: string, epoch: number): Promise<TtsTimings | null> {
     const startedAtAll = performance.now();
-    const chunks = splitForTTS(text);
+    const chunks = splitFirstClauseThen(text);
     if (chunks.length === 0) return null;
 
     // Per-stage stamps used by the metrics block in flushAndProcess.

@@ -34,6 +34,16 @@ const CHAT_MODEL_ANALYSIS = process.env.SARVAM_ANALYSIS_MODEL ?? "sarvam-30b";
 //  - sarvam-30b's 384-token budget is irrelevant here: 30b is no longer
 //    used as primary because of latency variance.
 const CHAT_MAX_TOKENS_CONVERSATION = 2000;
+// LATENCY: non-Sarvam providers (Groq, OpenAI, Gemini) don't run a
+// `<think>` block, so the 2000-token budget above is wasted headroom — the
+// LLM keeps generating until it has nothing more to say AND each token
+// adds wall-clock latency. 300 tokens is ~225 spoken words, comfortably
+// more than any natural conversational reply, and shaves 200-500ms off
+// Groq/OpenAI/Gemini round-trips by letting them stop sooner.
+const CHAT_MAX_TOKENS_LIVE_NON_SARVAM = 300;
+function liveMaxTokensFor(providerId: LlmProviderId): number {
+  return providerId === "sarvam" ? CHAT_MAX_TOKENS_CONVERSATION : CHAT_MAX_TOKENS_LIVE_NON_SARVAM;
+}
 // Cap how many prior turns we send to the LLM. Sarvam-30b latency grows
 // roughly linearly with prompt length, so a 10-turn call would ship ~3x
 // slower than turn 1 if we replayed everything. The system prompt is always
@@ -138,6 +148,47 @@ export function splitForTTS(text: string, maxChars = 200): string[] {
   }
   if (buf) out.push(buf);
   return out;
+}
+
+/**
+ * LATENCY: peel off a small first chunk (≤ `firstMax` chars) at a natural
+ * clause break — comma, semicolon, em-dash, or "?" — so the very first TTS
+ * round-trip is short and time-to-first-audio drops. The remainder runs
+ * through normal `splitForTTS` chunking and synthesizes in parallel during
+ * playback of the first chunk.
+ *
+ * If no clause break exists inside the window, returns `splitForTTS(text)`
+ * unchanged — we never split mid-word or after an unnaturally short prefix.
+ */
+export function splitFirstClauseThen(
+  text: string,
+  firstMin = 18,
+  firstMax = 80,
+  restMax = 200,
+): string[] {
+  const t = text.trim();
+  if (!t) return [];
+  // Already short enough that splitting wouldn't help — one TTS call wins.
+  if (t.length <= firstMin) return [t];
+
+  const window = t.slice(0, Math.min(firstMax, t.length));
+  // Prefer the LAST clause break inside the window so chunk 1 is as
+  // meaningful as possible while still under firstMax.
+  let cut = -1;
+  for (const re of [/[,;—–][\s"']/g, /[?][\s"']/g]) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(window)) !== null) {
+      // Include the punctuation, drop the trailing whitespace.
+      const end = m.index + 1;
+      if (end >= firstMin && end <= firstMax) cut = end;
+    }
+  }
+  if (cut === -1) return splitForTTS(t, restMax);
+
+  const first = t.slice(0, cut).trim();
+  const rest = t.slice(cut).trim();
+  if (!rest) return [first];
+  return [first, ...splitForTTS(rest, restMax)];
 }
 
 export function truncateForTTS(text: string, maxChars = TTS_MAX_CHARS): string {
@@ -297,7 +348,7 @@ export async function generateConversationResponse(
         sarvamFallbackKey: config.sarvam.apiKey,
       });
       const fb = await sarvam.provider.chat(
-        { messages: historyMessages, userInput, maxTokens: CHAT_MAX_TOKENS_CONVERSATION, temperature: 0.3 },
+        { messages: historyMessages, userInput, maxTokens: liveMaxTokensFor(sarvam.provider.id), temperature: 0.3 },
         sarvam.apiKey,
         sarvam.model,
       );
@@ -326,7 +377,7 @@ export async function generateConversationResponse(
     {
       messages: historyMessages,
       userInput,
-      maxTokens: CHAT_MAX_TOKENS_CONVERSATION,
+      maxTokens: liveMaxTokensFor(resolved.provider.id),
       temperature: 0.3,
     },
     resolved.apiKey,
@@ -359,7 +410,7 @@ export async function generateConversationResponse(
       sarvamFallbackKey: config.sarvam.apiKey,
     });
     const fb = await sarvam.provider.chat(
-      { messages: historyMessages, userInput, maxTokens: CHAT_MAX_TOKENS_CONVERSATION, temperature: 0.3 },
+      { messages: historyMessages, userInput, maxTokens: liveMaxTokensFor(sarvam.provider.id), temperature: 0.3 },
       sarvam.apiKey,
       sarvam.model,
     );

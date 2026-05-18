@@ -15,6 +15,7 @@ import {
   CreditCard,
   BarChart2,
   UserCog,
+  Headphones,
 } from "lucide-react";
 import { useHealthCheck } from "@workspace/api-client-react";
 
@@ -35,6 +36,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { href: "/subscriptions", label: "Subscriptions",   icon: CreditCard },
     { href: "/users",         label: "Users",           icon: UserCog },
     { href: "/monitor",       label: "Live Monitor",    icon: Radio },
+    { href: "/simulator",     label: "Call Simulator",  icon: Headphones },
   ];
 
   return (

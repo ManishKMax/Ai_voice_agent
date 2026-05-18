@@ -75,6 +75,12 @@ interface StartLiveKitAgentOptions {
   llmProvider?: string;
   /** Optional human-friendly call SID for logs. Generated if absent. */
   callSid?: string;
+  /** Fired exactly once when this worker tears down for any reason
+   *  (explicit disconnect, last participant leave, room close, or a
+   *  failure mid-stream). Lets the simulator controller drop its
+   *  in-memory room map and finalise the call row without depending on
+   *  the browser calling /end. */
+  onTeardown?: (reason: string) => void;
 }
 
 interface LiveKitAgentHandle {
@@ -301,6 +307,14 @@ async function doStartLiveKitAgent(
     // remove someone else's live worker.
     if (registeredHandle && liveKitAgents.get(opts.roomName) === registeredHandle) {
       liveKitAgents.delete(opts.roomName);
+    }
+    if (opts.onTeardown) {
+      try { opts.onTeardown(reason); } catch (err) {
+        logger.warn(
+          { err: (err as Error).message, callSid, roomName: opts.roomName },
+          "livekit_agent_onteardown_callback_failed",
+        );
+      }
     }
   };
 

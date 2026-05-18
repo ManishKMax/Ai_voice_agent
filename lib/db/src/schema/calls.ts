@@ -35,6 +35,12 @@ export const callsTable = pgTable("calls", {
   followUpDate: date("follow_up_date"),
   followUpTime: text("follow_up_time"),
   outcomeNotes: text("outcome_notes"),
+  // Origin of the call. `"production"` (default) covers real PSTN traffic
+  // — Twilio, Exotel, future SIP carriers. `"simulator"` is reserved for
+  // in-browser Call Simulator runs (Task #31) so analytics + reports can
+  // filter them out (`where source <> 'simulator'`). Free-form text so we
+  // can introduce new sources (e.g. `"loadtest"`) without a migration.
+  source: text("source").default("production").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

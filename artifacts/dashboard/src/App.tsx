@@ -22,6 +22,7 @@ import Monitor from "@/pages/monitor";
 import UsersPage from "@/pages/users";
 import SubscriptionsPage from "@/pages/subscriptions";
 import ReportsPage from "@/pages/reports";
+import Simulator from "@/pages/simulator";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -55,6 +56,7 @@ const ProtectedMonitor        = () => <ProtectedRoute component={Monitor} />;
 const ProtectedUsers          = () => <ProtectedRoute component={UsersPage} />;
 const ProtectedSubscriptions  = () => <ProtectedRoute component={SubscriptionsPage} />;
 const ProtectedReports        = () => <ProtectedRoute component={ReportsPage} />;
+const ProtectedSimulator      = () => <ProtectedRoute component={Simulator} />;
 
 function Router() {
   return (
@@ -74,6 +76,7 @@ function Router() {
       <Route path="/users"          component={ProtectedUsers} />
       <Route path="/subscriptions"  component={ProtectedSubscriptions} />
       <Route path="/reports"        component={ProtectedReports} />
+      <Route path="/simulator"      component={ProtectedSimulator} />
       <Route component={NotFound} />
     </Switch>
   );

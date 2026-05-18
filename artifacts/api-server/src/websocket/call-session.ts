@@ -2,7 +2,12 @@ import { performance } from "perf_hooks";
 import { eq } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { leadsTable } from "@workspace/db/schema";
-import { logger } from "../lib/logger.js";
+// sim-logger tees `{call_id}`-tagged log entries into the per-call simulator
+// bus (Task #31) so the in-browser simulator can subscribe to the exact same
+// `call_session_*` log lines that pino emits. For non-simulator calls it
+// short-circuits to a plain pino call.
+import { logger } from "../services/sim-logger.js";
+import { publishSimulator } from "../services/simulator-bus.js";
 import {
   subscribeMediaStream,
   type MediaStreamHandler,
@@ -832,6 +837,15 @@ export class CallSession {
     );
     addTurn(this.session.callSid, transcript, agentText);
 
+    // Task #31: per-call transcript events for the simulator UI so the
+    // transcript pane updates in real time without polling.
+    publishSimulator(this.session.callSid, "transcript", {
+      turn: this.turnId,
+      userText: transcript,
+      agentText,
+      isEnd: shouldEnd,
+    });
+
     broadcastSse("call.turn", {
       callSid: this.session.callSid,
       leadId: this.leadId,
@@ -937,7 +951,7 @@ export class CallSession {
         try {
           const dbCallId = await findCallIdBySid(this.session.callSid);
           if (dbCallId == null) return;
-          recordTurnMetrics({
+          const metricsRow = {
             callId: dbCallId,
             turnId: this.turnId,
             llmProvider: chatProvider,
@@ -955,7 +969,12 @@ export class CallSession {
             ttsLatencyMs,
             totalRoundtripMs,
             livekitTransportMs: null,
-          });
+          };
+          recordTurnMetrics(metricsRow);
+          // Task #31: also publish to the per-call simulator bus so the
+          // browser metrics panel can update its 13-field grid + running
+          // p50 without polling /api/calls/:id/metrics.
+          publishSimulator(this.session.callSid, "metrics", metricsRow);
         } catch (err) {
           logger.warn(
             { err: (err as Error).message, call_id: this.session.callSid },

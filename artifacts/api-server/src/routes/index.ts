@@ -22,6 +22,7 @@ import subscriptionsRouter from "../modules/subscriptions/subscriptions.routes.j
 import razorpayRouter from "../modules/razorpay/razorpay.routes.js";
 import reportsRouter from "../modules/reports/reports.routes.js";
 import debugRouter from "../modules/debug/debug.routes.js";
+import simulatorRouter from "../modules/simulator/simulator.routes.js";
 
 const router: IRouter = Router();
 
@@ -48,5 +49,6 @@ router.use(subscriptionsRouter);
 router.use(razorpayRouter);
 router.use(reportsRouter);
 router.use("/debug", debugRouter);
+router.use("/simulator", simulatorRouter);
 
 export default router;

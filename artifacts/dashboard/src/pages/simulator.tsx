@@ -154,6 +154,12 @@ export default function SimulatorPage() {
   // operator can manually unblock instead of silently hearing nothing.
   const [agentTrackAttached, setAgentTrackAttached] = useState(false);
   const [audioBlocked, setAudioBlocked] = useState(false);
+  // Live agent activity derived from `state_transition` log events. Surfaces
+  // Listening / Hearing you / Transcribing / Thinking / Speaking pills so the
+  // operator never assumes the call is frozen during the (1-3s) STT round-trip
+  // — that misperception was causing them to click End mid-flush before
+  // Sarvam could return a transcript.
+  const [agentActivity, setAgentActivity] = useState<string>("idle");
 
   const [transcript, setTranscript] = useState<TranscriptTurn[]>([]);
   const [currentMetrics, setCurrentMetrics] = useState<MetricRow | null>(null);
@@ -184,6 +190,7 @@ export default function SimulatorPage() {
     setConnected(false);
     setAgentTrackAttached(false);
     setAudioBlocked(false);
+    setAgentActivity("idle");
   }, []);
 
   /** Operator clicked "Enable audio" — call play() from inside the
@@ -271,6 +278,7 @@ export default function SimulatorPage() {
     setCurrentMetrics(null);
     setLogs([]);
     setStarting(true);
+    setAgentActivity("connecting");
     try {
       const startRes = await apiFetch("/api/simulator/start", {
         method: "POST",
@@ -375,6 +383,30 @@ export default function SimulatorPage() {
       es.addEventListener("log", (ev: MessageEvent) => {
         const parsed = JSON.parse(ev.data) as Record<string, unknown> & { ts: number; level: string; event: string | null };
         const { ts, level, event, ...rest } = parsed;
+        // Derive a human-friendly activity pill from CallSession state
+        // transitions so the operator can SEE the agent is still working
+        // during the 1-3s STT round-trip and doesn't bail on End mid-flush.
+        if (event === "call_session_state_transition" && typeof rest.state_to === "string") {
+          const ACTIVITY_MAP: Record<string, string> = {
+            IDLE: "idle",
+            BOT_SPEAKING: "speaking",
+            WAIT_AFTER_BOT_SPEECH: "wrapping_up",
+            LISTENING: "listening",
+            USER_SPEECH_DETECTED: "hearing_you",
+            USER_SILENCE_DETECTED: "transcribing",
+            FLUSH_STT: "transcribing",
+            WAIT_FOR_FINAL_TRANSCRIPT: "transcribing",
+            PROCESS_TRANSCRIPT: "thinking",
+            ENDED: "idle",
+          };
+          const next = ACTIVITY_MAP[rest.state_to as string];
+          if (next) setAgentActivity(next);
+        } else if (event === "call_session_chat_completed") {
+          // LLM has returned; TTS is about to start.
+          setAgentActivity("speaking");
+        } else if (event === "call_session_stopped" || event === "call_session_finalised") {
+          setAgentActivity("idle");
+        }
         setLogs((l) => {
           const next = [...l, { ts, level, event, body: rest }];
           // Cap log buffer so a runaway call doesn't OOM the tab.
@@ -450,6 +482,20 @@ export default function SimulatorPage() {
                 {agentTrackAttached ? "Agent audio ✓" : "Waiting for agent…"}
               </Badge>
             )}
+            {session && (() => {
+              const ACTIVITY_UI: Record<string, { label: string; cls: string; title: string }> = {
+                idle:         { label: "Idle",          cls: "ml-2 bg-slate-400",   title: "No call activity" },
+                connecting:   { label: "Connecting…",   cls: "ml-2 bg-slate-500",   title: "Joining room" },
+                speaking:     { label: "🔊 Speaking",   cls: "ml-2 bg-blue-500",    title: "Agent is speaking — wait, or speak to interrupt" },
+                wrapping_up:  { label: "🔊 Wrapping up", cls: "ml-2 bg-blue-400",    title: "Agent just finished speaking — preparing to listen" },
+                listening:    { label: "👂 Listening",  cls: "ml-2 bg-emerald-500", title: "Agent is listening — go ahead and speak" },
+                hearing_you:  { label: "🎤 Hearing you",cls: "ml-2 bg-emerald-600", title: "Your voice is being captured" },
+                transcribing: { label: "✍️ Transcribing…", cls: "ml-2 bg-amber-500", title: "Sending audio to Sarvam STT (1-3s) — DO NOT click End yet" },
+                thinking:     { label: "🧠 Thinking…",  cls: "ml-2 bg-violet-500",  title: "LLM is generating a reply" },
+              };
+              const ui = ACTIVITY_UI[agentActivity] ?? ACTIVITY_UI.idle;
+              return <Badge className={ui.cls} title={ui.title}>{ui.label}</Badge>;
+            })()}
             {audioBlocked && (
               <Button
                 size="sm"

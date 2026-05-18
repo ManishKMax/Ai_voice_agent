@@ -235,6 +235,8 @@ export interface ChatResult {
   chatModel: string;
   /** LLM provider that produced the returned text. */
   chatProvider: LlmProviderId;
+  /** Completion tokens returned by the provider, when available. Used for tokens/sec metric. */
+  completionTokens?: number;
 }
 
 export interface GenerateConversationOptions {
@@ -298,6 +300,7 @@ export async function generateConversationResponse(
           chatMs: fb.latencyMs,
           chatModel: fb.model,
           chatProvider: fb.providerId,
+          completionTokens: fb.usage?.completionTokens,
         };
       }
     }
@@ -328,6 +331,7 @@ export async function generateConversationResponse(
       chatMs: primary.latencyMs,
       chatModel: primary.model,
       chatProvider: primary.providerId,
+      completionTokens: primary.usage?.completionTokens,
     };
   }
 
@@ -356,6 +360,7 @@ export async function generateConversationResponse(
         chatMs: primary.latencyMs + fb.latencyMs,
         chatModel: fb.model,
         chatProvider: fb.providerId,
+        completionTokens: fb.usage?.completionTokens,
       };
     }
   }

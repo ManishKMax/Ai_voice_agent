@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, timestamp, date } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, date, real, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -46,3 +46,59 @@ export const insertCallSchema = createInsertSchema(callsTable).omit({
 });
 export type InsertCall = z.infer<typeof insertCallSchema>;
 export type Call = typeof callsTable.$inferSelect;
+
+/**
+ * Per-turn latency metrics for live voice calls.
+ * Written fire-and-forget by `CallSession` after each conversational turn.
+ * No PII — only timing data and provider IDs.
+ *
+ * Field semantics (all *_ms columns are wall-clock milliseconds):
+ *  - stt_latency_ms          end-of-utterance → STT final transcript
+ *  - llm_first_token_ms      STT-final → LLM first token (= llm_latency_ms for non-streaming providers)
+ *  - llm_tokens_per_sec      completion tokens / (llm_complete - llm_first_token) seconds; null if usage missing
+ *  - first_word_trigger_ms   LLM first token → first sentence handed to TTS
+ *  - tts_stream_start_ms     first TTS HTTP request → first TTS bytes returned
+ *  - first_playback_ms       TTS first bytes → first outbound audio frame on the wire
+ *  - first_audio_chunk_ms    start-of-turn → first outbound audio frame (alias of total_roundtrip)
+ *  - tts_playback_start_at   absolute wall-clock timestamp of first outbound audio frame
+ *  - tts_complete_ms         TTS first bytes → last outbound audio frame
+ *  - llm_latency_ms          LLM request sent → LLM response complete
+ *  - tts_latency_ms          first TTS HTTP request → last outbound audio frame
+ *  - total_roundtrip_ms      end-of-utterance → first outbound audio frame (user-perceived lag)
+ *  - livekit_transport_ms    LiveKit RTT (null for Twilio/Exotel; populated by Task #30)
+ */
+export const callMetricsTable = pgTable(
+  "call_metrics",
+  {
+    id: serial("id").primaryKey(),
+    callId: integer("call_id").notNull(),
+    turnId: integer("turn_id").notNull(),
+    llmProvider: text("llm_provider").notNull(),
+    llmModel: text("llm_model"),
+    sttLatencyMs: integer("stt_latency_ms"),
+    llmFirstTokenMs: integer("llm_first_token_ms"),
+    llmTokensPerSec: real("llm_tokens_per_sec"),
+    firstWordTriggerMs: integer("first_word_trigger_ms"),
+    ttsStreamStartMs: integer("tts_stream_start_ms"),
+    firstPlaybackMs: integer("first_playback_ms"),
+    firstAudioChunkMs: integer("first_audio_chunk_ms"),
+    ttsPlaybackStartAt: timestamp("tts_playback_start_at"),
+    ttsCompleteMs: integer("tts_complete_ms"),
+    llmLatencyMs: integer("llm_latency_ms"),
+    ttsLatencyMs: integer("tts_latency_ms"),
+    totalRoundtripMs: integer("total_roundtrip_ms"),
+    livekitTransportMs: integer("livekit_transport_ms"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("call_metrics_call_turn_idx").on(t.callId, t.turnId),
+    index("call_metrics_created_provider_idx").on(t.createdAt, t.llmProvider),
+  ],
+);
+
+export const insertCallMetricsSchema = createInsertSchema(callMetricsTable).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertCallMetrics = z.infer<typeof insertCallMetricsSchema>;
+export type CallMetrics = typeof callMetricsTable.$inferSelect;

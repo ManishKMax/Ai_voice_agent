@@ -8,8 +8,35 @@ import {
   subscriptionsTable,
 } from "@workspace/db/schema";
 import { sql, desc, and, gte, eq } from "drizzle-orm";
+import { getLatencyAggregates } from "../../services/metrics.service.js";
 
 const router = Router();
+
+/**
+ * GET /api/reports/latency?providerId=&from=&to=&groupBy=day|hour
+ * Aggregated p50/p95/p99 of every per-stage latency metric for the Voice
+ * Latency trends widget. All filters optional.
+ */
+router.get(
+  "/reports/latency",
+  authMiddleware,
+  requireRole("COMPANY_ADMIN", "SUPER_ADMIN"),
+  async (req, res, next): Promise<void> => {
+    try {
+      const providerId = (req.query["providerId"] as string | undefined) || undefined;
+      const fromRaw = req.query["from"] as string | undefined;
+      const toRaw = req.query["to"] as string | undefined;
+      const groupByRaw = (req.query["groupBy"] as string | undefined) || "day";
+      const groupBy: "day" | "hour" = groupByRaw === "hour" ? "hour" : "day";
+      const from = fromRaw ? new Date(fromRaw) : undefined;
+      const to = toRaw ? new Date(toRaw) : undefined;
+      const rows = await getLatencyAggregates({ providerId, from, to, groupBy });
+      res.json({ groupBy, providerId: providerId ?? null, buckets: rows });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 router.get("/reports/overview", authMiddleware, requireRole("COMPANY_ADMIN", "SUPER_ADMIN"), async (_req, res, next): Promise<void> => {
   try {

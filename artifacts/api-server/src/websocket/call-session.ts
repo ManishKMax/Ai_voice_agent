@@ -42,6 +42,7 @@ import { getLeadById, updateLeadStatus } from "../modules/leads/leads.service.js
 import { updateCallTranscript } from "../modules/calls/calls.service.js";
 import { broadcastSse } from "../services/sse.service.js";
 import { isLlmProviderId } from "../services/llm/index.js";
+import { recordTurnMetrics, findCallIdBySid } from "../services/metrics.service.js";
 
 /**
  * Phase 3 — Live call state machine driven by Twilio Media Streams.
@@ -111,6 +112,14 @@ const BARGE_IN_MIN_MS        = envInt("VOICE_BARGE_IN_MIN_MS",         200,   0,
 // TTS being ready) trips barge-in and kills the greeting before the user
 // has heard a single word from the agent.
 const BARGE_IN_GRACE_MS      = envInt("VOICE_BARGE_IN_GRACE_MS",       800,   0, 10000);
+
+interface TtsTimings {
+  ttsRequestAtMs: number;
+  ttsFirstByteAtMs: number | null;
+  firstFrameAtMs: number | null;
+  firstFrameWallClockAt: Date | null;
+  lastFrameAtMs: number | null;
+}
 
 interface PerTurnLog {
   call_id: string;
@@ -750,6 +759,10 @@ export class CallSession {
 
     this.transition("PROCESS_TRANSCRIPT");
     this.turnId++;
+    // Capture the end-of-user-utterance timestamp BEFORE resetTurnBuffers()
+    // clears flushStartMs — otherwise stt_latency_ms collapses to ~0 and
+    // total_roundtrip_ms loses the STT stage (caught by code review).
+    const turnStartMs = this.flushStartMs ?? performance.now();
     // Clear buffers BEFORE the LLM await so any inbound frames during the
     // gap don't accumulate against the next turn (they're already dropped
     // because state isn't LISTENING, but be defensive).
@@ -763,11 +776,20 @@ export class CallSession {
       return;
     }
 
-    const { text: agentText, shouldEnd, chatMs, chatModel, chatProvider } = await generateConversationResponse(
-      sessionState.messages,
-      transcript,
-      { llmProviderOverride: this.llmProviderOverride },
-    );
+    // Capture LLM request / complete stamps to compute per-stage metrics.
+    // For non-streaming providers (the only kind we have today) first-token
+    // is reported as the response completion stamp, so llm_first_token_ms
+    // collapses to llm_latency_ms. Once a streaming provider lands the
+    // provider's `firstTokenMs` will be honoured here.
+    const sttFinalAtMs = performance.now();
+    const llmRequestSentAtMs = performance.now();
+    const { text: agentText, shouldEnd, chatMs, chatModel, chatProvider, completionTokens } =
+      await generateConversationResponse(
+        sessionState.messages,
+        transcript,
+        { llmProviderOverride: this.llmProviderOverride },
+      );
+    const llmCompleteAtMs = performance.now();
     logger.info(
       {
         call_id: this.session.callSid,
@@ -792,16 +814,122 @@ export class CallSession {
       isEnd: shouldEnd || this.turnId >= (agentConfig.maxTurns ?? MAX_TURNS_DEFAULT),
     });
 
-    if (shouldEnd || this.turnId >= (agentConfig.maxTurns ?? MAX_TURNS_DEFAULT)) {
-      await this.speakAndEnd(agentText, shouldEnd ? "llm_done" : "max_turns");
-      return;
-    }
+    const isEnd = shouldEnd || this.turnId >= (agentConfig.maxTurns ?? MAX_TURNS_DEFAULT);
+    const ttsTimings = isEnd
+      ? await this.speakAndEnd(agentText, shouldEnd ? "llm_done" : "max_turns")
+      : await this.speakAndAdvance(agentText, /*isOpening*/ false);
 
-    await this.speakAndAdvance(agentText, /*isOpening*/ false);
+    // Compute per-stage metrics + persist fire-and-forget. Wrap the whole
+    // block so an arithmetic edge case never aborts the call.
+    try {
+      const sttLatencyMs = Math.max(0, Math.round(sttFinalAtMs - turnStartMs));
+      const llmLatencyMs = Math.max(0, Math.round(llmCompleteAtMs - llmRequestSentAtMs));
+      // firstTokenMs synthetic for non-streaming providers (task #29 spec).
+      const llmFirstTokenMs = llmLatencyMs;
+      // tokens/sec computed from output tokens & elapsed seconds; null when
+      // the provider didn't return usage (Sarvam currently).
+      const llmTokensPerSec =
+        completionTokens && llmLatencyMs > 0
+          ? +(completionTokens / (llmLatencyMs / 1000)).toFixed(2)
+          : null;
+
+      const firstFrameAtMs = ttsTimings?.firstFrameAtMs ?? null;
+      const lastFrameAtMs  = ttsTimings?.lastFrameAtMs  ?? null;
+      const ttsRequestAtMs = ttsTimings?.ttsRequestAtMs ?? null;
+      const ttsFirstByteAtMs = ttsTimings?.ttsFirstByteAtMs ?? null;
+
+      const firstWordTriggerMs =
+        ttsRequestAtMs != null ? Math.max(0, Math.round(ttsRequestAtMs - llmCompleteAtMs)) : null;
+      const ttsStreamStartMs =
+        ttsRequestAtMs != null && ttsFirstByteAtMs != null
+          ? Math.max(0, Math.round(ttsFirstByteAtMs - ttsRequestAtMs))
+          : null;
+      const firstPlaybackMs =
+        ttsFirstByteAtMs != null && firstFrameAtMs != null
+          ? Math.max(0, Math.round(firstFrameAtMs - ttsFirstByteAtMs))
+          : null;
+      const firstAudioChunkMs =
+        firstFrameAtMs != null ? Math.max(0, Math.round(firstFrameAtMs - turnStartMs)) : null;
+      const ttsCompleteMs =
+        ttsFirstByteAtMs != null && lastFrameAtMs != null
+          ? Math.max(0, Math.round(lastFrameAtMs - ttsFirstByteAtMs))
+          : null;
+      const ttsLatencyMs =
+        ttsRequestAtMs != null && lastFrameAtMs != null
+          ? Math.max(0, Math.round(lastFrameAtMs - ttsRequestAtMs))
+          : null;
+      const totalRoundtripMs = firstAudioChunkMs;
+      const ttsPlaybackStartAt = ttsTimings?.firstFrameWallClockAt ?? null;
+
+      const metricsBlock = {
+        stt_latency_ms: sttLatencyMs,
+        llm_first_token_ms: llmFirstTokenMs,
+        llm_tokens_per_sec: llmTokensPerSec,
+        first_word_trigger_ms: firstWordTriggerMs,
+        tts_stream_start_ms: ttsStreamStartMs,
+        first_playback_ms: firstPlaybackMs,
+        first_audio_chunk_ms: firstAudioChunkMs,
+        tts_playback_start_at: ttsPlaybackStartAt?.toISOString() ?? null,
+        tts_complete_ms: ttsCompleteMs,
+        llm_latency_ms: llmLatencyMs,
+        tts_latency_ms: ttsLatencyMs,
+        total_roundtrip_ms: totalRoundtripMs,
+        livekit_transport_ms: null as number | null,
+      };
+
+      logger.info(
+        {
+          call_id: this.session.callSid,
+          turn_id: this.turnId,
+          llm_provider: chatProvider,
+          llm_model: chatModel,
+          ...metricsBlock,
+        },
+        "call_session_turn_metrics",
+      );
+
+      // Resolve the DB call id from the Twilio call SID and persist.
+      // Fire-and-forget; no await — the call session continues immediately.
+      void (async () => {
+        try {
+          const dbCallId = await findCallIdBySid(this.session.callSid);
+          if (dbCallId == null) return;
+          recordTurnMetrics({
+            callId: dbCallId,
+            turnId: this.turnId,
+            llmProvider: chatProvider,
+            llmModel: chatModel,
+            sttLatencyMs,
+            llmFirstTokenMs,
+            llmTokensPerSec,
+            firstWordTriggerMs,
+            ttsStreamStartMs,
+            firstPlaybackMs,
+            firstAudioChunkMs,
+            ttsPlaybackStartAt,
+            ttsCompleteMs,
+            llmLatencyMs,
+            ttsLatencyMs,
+            totalRoundtripMs,
+            livekitTransportMs: null,
+          });
+        } catch (err) {
+          logger.warn(
+            { err: (err as Error).message, call_id: this.session.callSid },
+            "call_metrics_resolve_failed",
+          );
+        }
+      })();
+    } catch (err) {
+      logger.warn(
+        { err: (err as Error).message, call_id: this.session.callSid, turn_id: this.turnId },
+        "call_session_metrics_compute_failed",
+      );
+    }
   }
 
-  private async speakAndAdvance(text: string, _isOpening: boolean): Promise<void> {
-    if (this.cancelled) return;
+  private async speakAndAdvance(text: string, _isOpening: boolean): Promise<TtsTimings | null> {
+    if (this.cancelled) return null;
     const myEpoch = ++this.ttsEpoch;
     this.ttsStopRequested = false;
     this.bargeInFirstAtMs = null;
@@ -812,12 +940,12 @@ export class CallSession {
     // (~300ms typical, observed up to 12s on cold turn-1) is paid before
     // the user finishes their reply rather than after.
     this.prewarmStt();
-    await this.streamTtsToTwilio(text, myEpoch);
+    const timings = await this.streamTtsToTwilio(text, myEpoch);
     // If a newer speak invocation has started (barge-in → next turn) while we
     // were awaiting our pipelined TTS promises, bail without touching state
     // or arming a watchdog — the new speak owns the session now.
-    if (this.cancelled || this.ttsEpoch !== myEpoch) return;
-    if (this.state !== "BOT_SPEAKING") return;
+    if (this.cancelled || this.ttsEpoch !== myEpoch) return timings;
+    if (this.state !== "BOT_SPEAKING") return timings;
     this.botSpeakingEndMs = performance.now();
 
     this.transition("WAIT_AFTER_BOT_SPEECH");
@@ -825,6 +953,7 @@ export class CallSession {
       this.postBotTimer = null;
       this.startListening();
     }, POST_BOT_GRACE_MS);
+    return timings;
   }
 
   /**
@@ -854,22 +983,23 @@ export class CallSession {
     });
   }
 
-  private async speakAndEnd(text: string, reason: string): Promise<void> {
-    if (this.cancelled) return;
+  private async speakAndEnd(text: string, reason: string): Promise<TtsTimings | null> {
+    if (this.cancelled) return null;
     const myEpoch = ++this.ttsEpoch;
     this.ttsStopRequested = false;
     this.bargeInFirstAtMs = null;
     this.botFirstFrameSentAtMs = null;
     this.transition("BOT_SPEAKING");
     this.botSpeakingStartMs = performance.now();
-    await this.streamTtsToTwilio(text, myEpoch);
-    if (this.cancelled || this.ttsEpoch !== myEpoch) return;
+    const timings = await this.streamTtsToTwilio(text, myEpoch);
+    if (this.cancelled || this.ttsEpoch !== myEpoch) return timings;
     this.botSpeakingEndMs = performance.now();
     logger.info(
       { call_id: this.session.callSid, reason, turn_id: this.turnId },
       "call_session_ending",
     );
     this.endCall(reason);
+    return timings;
   }
 
   /**
@@ -883,10 +1013,17 @@ export class CallSession {
    * chunk's TTS cost dominates time-to-first-audio, and remaining chunks
    * synthesize in parallel during playback of earlier ones.
    */
-  private async streamTtsToTwilio(text: string, epoch: number): Promise<void> {
+  private async streamTtsToTwilio(text: string, epoch: number): Promise<TtsTimings | null> {
     const startedAtAll = performance.now();
     const chunks = splitForTTS(text);
-    if (chunks.length === 0) return;
+    if (chunks.length === 0) return null;
+
+    // Per-stage stamps used by the metrics block in flushAndProcess.
+    const ttsRequestAtMs = performance.now();
+    let ttsFirstByteAtMs: number | null = null;
+    let firstFrameAtMs: number | null = null;
+    let firstFrameWallClockAt: Date | null = null;
+    let lastFrameAtMs: number | null = null;
 
     // Kick off all TTS requests concurrently. They resolve out of order, but
     // we play them strictly in order via the awaited iteration below.
@@ -900,9 +1037,10 @@ export class CallSession {
       this.cancelled || this.ttsStopRequested || this.ttsEpoch !== epoch;
 
     for (let i = 0; i < ttsPromises.length; i++) {
-      if (isStale()) return;
+      if (isStale()) return { ttsRequestAtMs, ttsFirstByteAtMs, firstFrameAtMs, firstFrameWallClockAt, lastFrameAtMs };
       const wav = await ttsPromises[i];
-      if (isStale()) return;
+      if (i === 0) ttsFirstByteAtMs = performance.now();
+      if (isStale()) return { ttsRequestAtMs, ttsFirstByteAtMs, firstFrameAtMs, firstFrameWallClockAt, lastFrameAtMs };
       if (!wav || wav.length <= 44) {
         logger.warn(
           {
@@ -956,7 +1094,7 @@ export class CallSession {
       const startedAtChunk = performance.now();
 
       for (let sent = 0; sent < totalFrames; sent++) {
-        if (isStale()) return;
+        if (isStale()) return { ttsRequestAtMs, ttsFirstByteAtMs, firstFrameAtMs, firstFrameWallClockAt, lastFrameAtMs };
         const offset = sent * frameBytesPcm;
         const pcmSlice = pcm.subarray(offset, Math.min(offset + frameBytesPcm, pcm.length));
         const wireSlice = this.provider.encodeOutboundFrame(pcmSlice);
@@ -968,6 +1106,8 @@ export class CallSession {
           // gates on this so the user's "Hello?" on pickup doesn't kill
           // the greeting before they've heard anything.
           this.botFirstFrameSentAtMs = performance.now();
+          firstFrameAtMs = this.botFirstFrameSentAtMs;
+          firstFrameWallClockAt = new Date();
           {
             const elapsed = Math.round(performance.now() - startedAtAll);
             logger.info(
@@ -996,6 +1136,8 @@ export class CallSession {
         }
       }
     }
+    lastFrameAtMs = performance.now();
+    return { ttsRequestAtMs, ttsFirstByteAtMs, firstFrameAtMs, firstFrameWallClockAt, lastFrameAtMs };
   }
 
   private endCall(reason: string): void {

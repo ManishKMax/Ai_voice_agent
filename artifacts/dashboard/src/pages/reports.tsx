@@ -38,6 +38,145 @@ async function apiFetch(path: string) {
 const fmtMins = (mins: number) =>
   mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
 
+interface LatencyBucket {
+  bucket: string;
+  provider_id: string;
+  turn_count: number;
+  [key: string]: number | string;
+}
+
+const LATENCY_METRICS: { key: string; label: string; unit: string }[] = [
+  { key: "total_roundtrip_ms",   label: "Total roundtrip",  unit: "ms" },
+  { key: "stt_latency_ms",       label: "STT latency",      unit: "ms" },
+  { key: "llm_latency_ms",       label: "LLM latency",      unit: "ms" },
+  { key: "llm_first_token_ms",   label: "LLM first token",  unit: "ms" },
+  { key: "first_word_trigger_ms",label: "First word trigger", unit: "ms" },
+  { key: "tts_stream_start_ms",  label: "TTS stream start", unit: "ms" },
+  { key: "first_playback_ms",    label: "First playback",   unit: "ms" },
+  { key: "tts_complete_ms",      label: "TTS complete",     unit: "ms" },
+  { key: "tts_latency_ms",       label: "TTS latency",      unit: "ms" },
+];
+
+const PROVIDER_COLORS: Record<string, string> = {
+  sarvam: "#6366f1",
+  groq:   "#10b981",
+  openai: "#f59e0b",
+  gemini: "#ef4444",
+};
+
+function LatencyWidget() {
+  const [providerFilter, setProviderFilter] = React.useState<string>("");
+  const [groupBy, setGroupBy] = React.useState<"day" | "hour">("day");
+  const [rangeDays, setRangeDays] = React.useState<number>(14);
+  const [percentile, setPercentile] = React.useState<"p50" | "p95" | "p99">("p50");
+  const fromIso = React.useMemo(
+    () => new Date(Date.now() - rangeDays * 24 * 60 * 60 * 1000).toISOString(),
+    [rangeDays],
+  );
+  const { data, isLoading } = useQuery({
+    queryKey: ["reports-latency", providerFilter, groupBy, rangeDays],
+    queryFn: () => {
+      const qs = new URLSearchParams({ groupBy, from: fromIso });
+      if (providerFilter) qs.set("providerId", providerFilter);
+      return apiFetch(`/reports/latency?${qs.toString()}`);
+    },
+    refetchInterval: 60_000,
+  });
+
+  const buckets: LatencyBucket[] = data?.buckets ?? [];
+
+  // Pivot per metric: one chart with one line per provider.
+  const providers = Array.from(new Set(buckets.map((b) => b.provider_id))).sort();
+
+  return (
+    <div className="rounded-lg border bg-card p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold">Voice Latency Trends</h2>
+          <p className="text-xs text-muted-foreground mt-1">
+            Per-stage round-trip latency, color-coded by LLM provider.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <select className="text-xs border rounded px-2 py-1 bg-background"
+            value={percentile} onChange={(e) => setPercentile(e.target.value as "p50" | "p95" | "p99")}>
+            <option value="p50">p50</option>
+            <option value="p95">p95</option>
+            <option value="p99">p99</option>
+          </select>
+          <select className="text-xs border rounded px-2 py-1 bg-background"
+            value={groupBy} onChange={(e) => setGroupBy(e.target.value as "day" | "hour")}>
+            <option value="day">by day</option>
+            <option value="hour">by hour</option>
+          </select>
+          <select className="text-xs border rounded px-2 py-1 bg-background"
+            value={rangeDays} onChange={(e) => setRangeDays(parseInt(e.target.value, 10))}>
+            <option value={1}>last 24h</option>
+            <option value={7}>last 7d</option>
+            <option value={14}>last 14d</option>
+            <option value={30}>last 30d</option>
+          </select>
+          <select className="text-xs border rounded px-2 py-1 bg-background"
+            value={providerFilter} onChange={(e) => setProviderFilter(e.target.value)}>
+            <option value="">All providers</option>
+            <option value="sarvam">Sarvam</option>
+            <option value="groq">Groq</option>
+            <option value="openai">OpenAI</option>
+            <option value="gemini">Gemini</option>
+          </select>
+        </div>
+      </div>
+      {isLoading ? (
+        <div className="text-xs text-muted-foreground py-8 text-center">Loading latency data...</div>
+      ) : buckets.length === 0 ? (
+        <div className="text-xs text-muted-foreground py-8 text-center">
+          No turn metrics yet. Run a live call to populate this widget.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {LATENCY_METRICS.map((m) => {
+            // Build time-series: one row per bucket, one column per provider.
+            const byBucket = new Map<string, Record<string, number | string>>();
+            for (const b of buckets) {
+              const key = String(b.bucket);
+              if (!byBucket.has(key)) byBucket.set(key, { bucket: key });
+              const row = byBucket.get(key)!;
+              const v = b[`${m.key}_${percentile}`];
+              if (v != null) row[b.provider_id] = Math.round(Number(v));
+            }
+            const series = Array.from(byBucket.values()).sort((a, b) =>
+              String(a["bucket"]).localeCompare(String(b["bucket"])),
+            );
+            return (
+              <div key={m.key} className="border rounded p-3 space-y-1">
+                <p className="text-xs font-medium">{m.label} <span className="text-muted-foreground font-normal">{percentile}</span></p>
+                <ResponsiveContainer width="100%" height={120}>
+                  <LineChart data={series} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+                    <XAxis dataKey="bucket" tick={{ fontSize: 9 }} tickFormatter={(v) => String(v).slice(5, 10)} />
+                    <YAxis tick={{ fontSize: 9 }} unit={m.unit} />
+                    <Tooltip formatter={(v) => `${v} ${m.unit}`} />
+                    {providers.map((p) => (
+                      <Line
+                        key={p}
+                        type="monotone"
+                        dataKey={p}
+                        stroke={PROVIDER_COLORS[p] ?? "#888"}
+                        strokeWidth={1.5}
+                        dot={false}
+                        connectNulls
+                      />
+                    ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ReportsPage() {
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["reports-overview"],
@@ -178,6 +317,8 @@ export default function ReportsPage() {
           </ResponsiveContainer>
         </div>
       )}
+
+      <LatencyWidget />
 
       {/* Outcome Breakdown */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

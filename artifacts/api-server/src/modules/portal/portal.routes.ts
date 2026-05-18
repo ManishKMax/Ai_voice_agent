@@ -221,8 +221,10 @@ router.get("/credentials", requireClerkAuth, async (req: any, res, next) => {
         phoneNumber: tenant.exotelPhoneNumber ?? "",
       },
       livekit: {
-        // Trunk ID is not secret (it's a public LiveKit resource handle),
-        // but we expose ony the suffix to discourage UI copy-paste leaks.
+        // Trunk ID is a public LiveKit resource handle (not a secret) and is
+        // returned in full so the portal UI can show what's assigned. It is,
+        // however, READ-ONLY from the portal — PATCH /credentials rejects
+        // any client attempt to set this field; admin must assign trunks.
         sipTrunkId: tenant.livekitSipTrunkId ?? "",
         outboundNumber: tenant.livekitSipOutboundNumber ?? "",
         // Indicates whether platform-wide env defaults will be used when

@@ -119,11 +119,18 @@ router.post(
 
       if (event === "participant_joined") {
         await handleCallStatusUpdate(identity, "answered", leadId);
-      } else if (event === "participant_left" || event === "participant_connection_aborted") {
-        // Duration is not in the participant_left payload; CallSession's
-        // own end-of-call analytics row carries it. Pass 0 to keep the
-        // call row schema-valid.
+      } else if (event === "participant_left") {
+        // Normal hangup after the lead picked up. Duration isn't in the
+        // payload; CallSession's end-of-call analytics carries the real
+        // number. Pass 0 to keep the row schema-valid.
         await handleCallStatusUpdate(identity, "completed", leadId, 0);
+      } else if (event === "participant_connection_aborted") {
+        // The PSTN side never connected — busy, no-answer, carrier reject,
+        // or trunk-level failure. Mark "no-answer" (matching the call_status
+        // enum) so the queue's retry policy fires correctly — "completed"
+        // would bypass retry. LiveKit doesn't break abort reasons down
+        // finely enough to distinguish busy vs. no-answer reliably.
+        await handleCallStatusUpdate(identity, "no-answer", leadId, 0);
       }
 
       res.status(200).send("ok");

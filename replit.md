@@ -367,9 +367,11 @@ What's intentionally NOT in Phase 2:
 - No `livekit_transport_ms` metric persisted yet (TODO once we can read
   WebRTC RTC stats off the room from agent-worker). The end-to-end
   per-turn latency in `call_metrics` already covers user-visible latency.
-- No Settings UI form for the per-tenant LiveKit SIP fields — set via
-  `PATCH /api/portal/credentials` `{telephonyProvider:"livekit",livekit:{sipTrunkId,outboundNumber}}`
-  for now, full UI in a follow-up.
+- No Settings UI form for the per-tenant LiveKit SIP fields. Tenants
+  can only set their `outboundNumber` via
+  `PATCH /api/portal/credentials {telephonyProvider:"livekit",livekit:{outboundNumber}}`.
+  Trunk assignment is admin-only (see "Tenant-to-trunk isolation" below)
+  and currently set via SQL; full UI in a follow-up.
 - No admin UI to assign per-tenant trunks — set via DB
   (`UPDATE tenants SET livekit_sip_trunk_id=... WHERE id=$1;`) and put
   the trunk on the allowlist below. Self-service trunk editing via the

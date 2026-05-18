@@ -29,6 +29,11 @@ async function buildAll() {
     // - use path traversal to read files (e.g. @google-cloud/secret-manager loads sibling .proto files)
     external: [
       "*.node",
+      "@livekit/rtc-node",
+      "@livekit/rtc-node-*",
+      "@livekit/rtc-node-darwin-*",
+      "@livekit/rtc-node-linux-*",
+      "@livekit/rtc-node-win32-*",
       "sharp",
       "better-sqlite3",
       "sqlite3",

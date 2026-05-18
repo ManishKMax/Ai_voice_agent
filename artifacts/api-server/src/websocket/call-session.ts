@@ -29,6 +29,7 @@ import {
   generateConversationResponse,
   analyzeTranscript,
   splitFirstClauseThen,
+  detectTtsLanguage,
 } from "../services/sarvam.service.js";
 import { SarvamSttClient, STT_RESPONSE_TIMEOUT_MS } from "../services/sarvam-stt-ws.client.js";
 import {
@@ -1128,12 +1129,28 @@ export class CallSession {
     let firstFrameWallClockAt: Date | null = null;
     let lastFrameAtMs: number | null = null;
 
+    // Resolve the TTS language ONCE for the entire turn — not per chunk.
+    // Why this matters: `generateSpeech` falls back to `detectTtsLanguage`
+    // when no explicit override is supplied, which runs per-chunk against
+    // the chunk's local text. A Hinglish reply like "Achha, मैं समझ गयी"
+    // splits into ["Achha,", "मैं समझ गयी"] — chunk 1 has no Devanagari
+    // and gets rendered as `en-IN`, chunk 2 has Devanagari and gets
+    // `hi-IN`. Same speaker ID + two different `target_language_code`
+    // values = sounds like two different people mid-sentence (Sarvam's
+    // acoustic model is keyed off language). Detect against the WHOLE
+    // text so all chunks lock to the same locale.
+    const turnLanguage =
+      this.languageOverride ??
+      detectTtsLanguage(text, agentConfig.language);
+
     // Kick off all TTS requests concurrently. They resolve out of order, but
     // we play them strictly in order via the awaited iteration below.
     const ttsPromises = chunks.map((c) =>
       generateSpeech(c, agentConfig, {
         voice: this.voiceOverride,
-        language: this.languageOverride,
+        // Pass the turn-level resolved language as an EXPLICIT override
+        // so generateSpeech() skips per-chunk re-detection.
+        language: turnLanguage,
         // Ask Sarvam for the wire-format rate that matches this session's
         // outbound channel: 8 kHz for telephony, 24 kHz for HD simulator.
         // Bulbul often ignores the hint and returns 22050/24000 anyway —

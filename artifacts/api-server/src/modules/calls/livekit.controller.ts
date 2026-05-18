@@ -34,10 +34,11 @@ export async function mintParticipantToken(
       });
       return;
     }
-    const { identity: rawIdentity, roomName: rawRoom, name } = req.body as {
+    const { identity: rawIdentity, roomName: rawRoom, name, isAgent } = req.body as {
       identity?: string;
       roomName?: string;
       name?: string;
+      isAgent?: boolean;
     };
     const identity =
       typeof rawIdentity === "string" && rawIdentity.trim() !== ""
@@ -52,6 +53,7 @@ export async function mintParticipantToken(
       identity,
       name: typeof name === "string" && name ? name : identity,
       ttlSeconds: 60 * 60,
+      isAgent: isAgent === true,
     });
     res.json({
       success: true,

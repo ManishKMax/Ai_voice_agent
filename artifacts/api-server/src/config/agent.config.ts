@@ -109,6 +109,20 @@ export async function updateAgentConfig(patch: Partial<AgentConfig>): Promise<Ag
 export function buildGreetingText(cfg: AgentConfig, leadName: string): string {
   // Keep the greeting SHORT (~10 words) so TTS finishes in ~2s instead of ~5-6s.
   // Long greetings caused dead-air at the start of every call.
+  //
+  // For Indian languages, use the SAME Hinglish style the conversation
+  // model uses — otherwise the lead hears an English greeting and then
+  // the agent flips into Hindi mid-call, which sounds jarring. Hindi
+  // words go in Devanagari so Bulbul's Hindi voice pronounces them
+  // naturally (matches the system-prompt rule below).
+  const isIndian = cfg.language === "hi-IN" || cfg.language === "en-IN";
+  if (isIndian) {
+    return cfg.tone === "professional"
+      ? `Hi ${leadName} ji, मैं ${cfg.name} बोल रही हूँ ${cfg.companyName} से। एक मिनट है आपके पास?`
+      : cfg.tone === "casual"
+      ? `Hi ${leadName}, ${cfg.name} this side, ${cfg.companyName} से। एक minute हो सकता है?`
+      : `Hello ${leadName} ji, ${cfg.name} from ${cfg.companyName}. एक छोटा सा बात करनी थी, time है?`;
+  }
   return cfg.tone === "professional"
     ? `Hi ${leadName}, this is ${cfg.name} from ${cfg.companyName}. Got a minute?`
     : cfg.tone === "casual"
@@ -148,7 +162,24 @@ export function buildSystemPrompt(cfg: AgentConfig, leadName?: string, greetingT
   // user feedback that pronunciation was unintelligible.
   const isIndian = cfg.language === "hi-IN" || cfg.language === "en-IN";
   const languageRule = isIndian
-    ? `Reply in natural Hinglish. Write Hindi/Hindi-origin words in DEVANAGARI script (e.g. "समझ गई", "बता देती हूँ", "ठीक है"). Write English/loanwords in Latin script (e.g. "demo", "CRM", "schedule", "meeting"). NEVER write Hindi words in Roman letters — that breaks pronunciation. Example good reply: "समझ गई। Demo schedule कर देती हूँ।"`
+    ? `Reply in CASUAL EVERYDAY HINGLISH — the way young urban Indian professionals actually talk on phone. NOT formal/literary Hindi, NOT news-anchor Hindi.
+
+SCRIPT RULES (critical for pronunciation):
+- Write Hindi/Hindi-origin words in DEVANAGARI (e.g. "समझ गई", "ठीक है", "बता दो", "अच्छा")
+- Write English/business/tech words in LATIN (e.g. "demo", "CRM", "schedule", "meeting", "system", "leads", "sales", "team", "follow-up", "call back", "okay", "sure", "actually", "basically")
+- Use English for ALL technical, business, and modern words. Use Hindi ONLY for everyday connectors and emotion words.
+
+VOCABULARY — USE these natural words:
+✓ "system" (NOT "प्रणाली")          ✓ "abhi" / "अभी" (NOT "वर्तमान में")
+✓ "manage karna" (NOT "प्रबंधन")    ✓ "use karte ho" (NOT "उपयोग करते हैं")
+✓ "lead" / "leads" (NOT "ग्राहक")   ✓ "problem" (NOT "समस्या")
+✓ "demo" (NOT "प्रदर्शन")           ✓ "team" (NOT "दल")
+✓ "schedule" (NOT "नियोजन")         ✓ "feature" (NOT "विशेषता")
+
+NEVER use heavy/formal Hindi: वर्तमान, प्रणाली, उपयोग, प्रबंधन, ग्राहक, समस्या, प्रदर्शन, विशेषता, सहायता, धन्यवाद (use "thanks"), कृपया (use "please" or just drop it).
+
+Good example: "अच्छा, अभी कौन सा CRM use कर रहे हो? कोई specific problem face कर रहे हो leads manage करने में?"
+Bad example: "वर्तमान में आप किस प्रणाली का उपयोग कर रहे हैं? क्या आपको ग्राहक प्रबंधन में कोई समस्या है?"`
     : `Reply in ${cfg.language}.`;
 
   return `You are ${cfg.name}, a fast voice sales agent from ${cfg.companyName}.

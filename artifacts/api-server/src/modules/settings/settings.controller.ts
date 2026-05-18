@@ -389,13 +389,19 @@ function buildLlmSettingsView() {
     providers: LLM_PROVIDER_ORDER.map((id) => {
       const p = LLM_PROVIDERS[id];
       const slot = credentials[id] ?? {};
+      // Sarvam's effective key falls back to platformSettings.sarvamApiKey
+      // at runtime (resolveLlm), so the Settings UI should reflect that
+      // fallback — otherwise we'd display "not configured" for Sarvam while
+      // live chat works fine via the platform key.
+      const effectiveKey =
+        id === "sarvam" ? (slot.apiKey || platformSettings.sarvamApiKey) : slot.apiKey;
       return {
         id,
         label: p.label,
         defaultModel: p.defaultModel,
         model: slot.model ?? "",
-        apiKeyMasked: maskKey(slot.apiKey),
-        configured: !!slot.apiKey,
+        apiKeyMasked: maskKey(effectiveKey),
+        configured: !!effectiveKey,
       };
     }),
   };
@@ -463,7 +469,9 @@ export async function testLlmProvider(req: Request, res: Response, next: NextFun
     }
     const provider = getLlmProvider(providerId);
     const stored = agentConfig.llmCredentials?.[providerId] ?? {};
-    const apiKey = bodyApiKey && bodyApiKey !== "" ? bodyApiKey : stored.apiKey;
+    let apiKey = bodyApiKey && bodyApiKey !== "" ? bodyApiKey : stored.apiKey;
+    // Mirror runtime fallback: Sarvam falls back to the platform Sarvam key.
+    if (!apiKey && providerId === "sarvam") apiKey = platformSettings.sarvamApiKey;
     const model = bodyModel || stored.model;
     if (!apiKey) {
       res.status(400).json({ success: false, message: `No API key configured for ${provider.label}` });

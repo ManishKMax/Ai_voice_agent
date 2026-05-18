@@ -11,11 +11,13 @@ import { agentConfig, buildGreetingText } from "../../config/agent.config.js";
 import { generateSpeech } from "../../services/sarvam.service.js";
 import { storeAudio, setPendingGreeting } from "../../services/audio-cache.js";
 
+import type { LlmProviderId } from "../../services/llm/index.js";
+
 async function dispatchCall(
   toPhone: string,
   leadId: number,
   tenantId: number | null,
-  options: { llmProviderOverride?: string } = {},
+  options: { llmProviderOverride?: LlmProviderId } = {},
 ): Promise<string> {
   // Platform-level call (admin dashboard, no tenant) — uses platform Twilio creds
   if (!tenantId) {
@@ -40,12 +42,19 @@ async function dispatchCall(
     if (!tenant.exotelAccountSid || !tenant.exotelApiKey || !tenant.exotelApiToken || !tenant.exotelPhoneNumber) {
       throw new Error("Exotel credentials are not configured for this tenant");
     }
-    return initiateExotelCall(toPhone, leadId, {
-      accountSid: tenant.exotelAccountSid,
-      apiKey: tenant.exotelApiKey,
-      apiToken: tenant.exotelApiToken,
-      phoneNumber: tenant.exotelPhoneNumber,
-    });
+    return initiateExotelCall(
+      toPhone,
+      leadId,
+      {
+        accountSid: tenant.exotelAccountSid,
+        apiKey: tenant.exotelApiKey,
+        apiToken: tenant.exotelApiToken,
+        phoneNumber: tenant.exotelPhoneNumber,
+      },
+      // Symmetry with Twilio: forward per-call LLM override into the Exotel
+      // status-callback URL so the WS pipeline picks it up on connect.
+      { llmProviderOverride: options.llmProviderOverride },
+    );
   }
 
   // Twilio path: per-tenant creds if available, else platform fallback
@@ -67,7 +76,7 @@ async function dispatchCall(
 
 export async function triggerCallForLead(
   leadId: number,
-  options: { llmProviderOverride?: string } = {},
+  options: { llmProviderOverride?: LlmProviderId } = {},
 ): Promise<void> {
   const [lead] = await db
     .select()

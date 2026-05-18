@@ -27,9 +27,11 @@ function getClient(creds?: TwilioCredentials) {
   return _client;
 }
 
+import type { LlmProviderId } from "./llm/index.js";
+
 export interface InitiateCallOptions {
   /** Per-call LLM provider override (forwarded to /api/voice as query). */
-  llmProviderOverride?: string;
+  llmProviderOverride?: LlmProviderId;
 }
 
 export async function initiateCall(

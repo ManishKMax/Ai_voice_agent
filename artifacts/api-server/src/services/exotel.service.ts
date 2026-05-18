@@ -1,11 +1,18 @@
 import { logger } from "../lib/logger.js";
 import { config } from "../config/index.js";
 
+import type { LlmProviderId } from "./llm/index.js";
+
 export interface ExotelCredentials {
   accountSid: string;
   apiKey: string;
   apiToken: string;
   phoneNumber: string;
+}
+
+export interface InitiateExotelCallOptions {
+  /** Per-call LLM provider override (forwarded to status-callback URL). */
+  llmProviderOverride?: LlmProviderId;
 }
 
 /**
@@ -27,6 +34,7 @@ export async function initiateExotelCall(
   toPhone: string,
   leadId: number,
   creds: ExotelCredentials,
+  options: InitiateExotelCallOptions = {},
 ): Promise<string> {
   if (!creds.accountSid || !creds.apiKey || !creds.apiToken || !creds.phoneNumber) {
     throw new Error(
@@ -34,7 +42,10 @@ export async function initiateExotelCall(
     );
   }
 
-  const statusCallbackUrl = `${config.baseUrl}/api/call-status?leadId=${leadId}&provider=exotel`;
+  const llmQs = options.llmProviderOverride
+    ? `&llmProvider=${encodeURIComponent(options.llmProviderOverride)}`
+    : "";
+  const statusCallbackUrl = `${config.baseUrl}/api/call-status?leadId=${leadId}&provider=exotel${llmQs}`;
   // Auth via header only — never embed creds in URL (would leak in logs/redirects)
   const connectUrl = `https://api.exotel.com/v1/Accounts/${creds.accountSid}/Calls/connect.json`;
 

@@ -243,7 +243,7 @@ export interface GenerateConversationOptions {
    * Used by the in-browser simulator (Task #31) to A/B test providers without
    * mutating global settings. Unknown ids fall back to the configured provider.
    */
-  llmProviderOverride?: string;
+  llmProviderOverride?: LlmProviderId | string;
 }
 
 /**

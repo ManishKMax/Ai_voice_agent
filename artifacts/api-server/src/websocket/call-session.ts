@@ -41,6 +41,7 @@ import {
 import { getLeadById, updateLeadStatus } from "../modules/leads/leads.service.js";
 import { updateCallTranscript } from "../modules/calls/calls.service.js";
 import { broadcastSse } from "../services/sse.service.js";
+import { isLlmProviderId } from "../services/llm/index.js";
 
 /**
  * Phase 3 — Live call state machine driven by Twilio Media Streams.
@@ -209,14 +210,17 @@ export class CallSession {
    * agent_settings. Unknown values are ignored by the resolver and fall
    * through to the configured provider.
    */
-  private readonly llmProviderOverride: string | undefined;
+  private readonly llmProviderOverride: import("../services/llm/index.js").LlmProviderId | undefined;
 
-  constructor(session: MediaStreamSession, opts: { llmProviderOverride?: string } = {}) {
+  constructor(
+    session: MediaStreamSession,
+    opts: { llmProviderOverride?: import("../services/llm/index.js").LlmProviderId } = {},
+  ) {
     this.session = session;
     const leadIdRaw = session.customParameters["leadId"];
     this.leadId = leadIdRaw ? parseInt(leadIdRaw, 10) || 0 : 0;
-    this.llmProviderOverride =
-      opts.llmProviderOverride ?? session.customParameters["llmProvider"] ?? undefined;
+    const rawOverride = opts.llmProviderOverride ?? session.customParameters["llmProvider"];
+    this.llmProviderOverride = isLlmProviderId(rawOverride) ? rawOverride : undefined;
   }
 
   async start(): Promise<void> {
@@ -1125,8 +1129,9 @@ function makeHandler(): MediaStreamHandler {
   const sessions = new Map<string, CallSession>();
   return {
     onStart(session) {
+      const rawOverride = session.customParameters["llmProvider"];
       const cs = new CallSession(session, {
-        llmProviderOverride: session.customParameters["llmProvider"],
+        llmProviderOverride: isLlmProviderId(rawOverride) ? rawOverride : undefined,
       });
       sessions.set(session.streamSid, cs);
       void cs.start();

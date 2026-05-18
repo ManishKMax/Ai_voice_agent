@@ -1,4 +1,4 @@
-import { Router, type IRouter, raw, type Request, type Response } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import { WebhookReceiver } from "livekit-server-sdk";
 import { logger } from "../../lib/logger.js";
 import { getLiveKitWebhookCreds } from "../../services/livekit.service.js";
@@ -20,10 +20,16 @@ import { handleCallStatusUpdate } from "./calls.service.js";
  * Room-level events (room_started / room_finished) are logged for ops
  * but don't drive lead-state changes — those are participant-scoped.
  *
- * We accept raw bodies (Express `raw()` middleware here, since the
- * `WebhookReceiver` verifies the body bytes against the signature). The
- * route is mounted *before* the global JSON body parser at the
- * application level, but we also locally `raw()` here for safety.
+ * Signature verification needs the *raw* request body bytes (the JWT
+ * payload includes the SHA256 of the body). The global `express.json()`
+ * middleware in `app.ts` already captures the raw bytes into
+ * `req.rawBody` via its `verify` hook, so we consume that buffer here
+ * rather than installing a second body parser (which would race with
+ * the JSON parser and yield either an empty buffer or a parsed object,
+ * silently failing every signature check). If `rawBody` is missing —
+ * non-JSON content type, or app.ts changes — we fall back to
+ * re-serialising `req.body`, which works because LiveKit's JWT
+ * canonicalises the body before hashing.
  *
  * Configure in the LiveKit Cloud project console:
  *   Settings → Webhooks → URL = https://<host>/api/livekit/webhook
@@ -35,8 +41,7 @@ const router: IRouter = Router();
 
 router.post(
   "/livekit/webhook",
-  raw({ type: "*/*", limit: "1mb" }),
-  async (req: Request, res: Response): Promise<void> => {
+  async (req: Request & { rawBody?: Buffer }, res: Response): Promise<void> => {
     // Always 200 — LiveKit retries non-2xx aggressively and we don't want
     // a parsing error to wedge their delivery queue. Failures are logged.
     try {
@@ -47,12 +52,19 @@ router.post(
         return;
       }
 
-      const bodyBuf = req.body as Buffer | undefined;
-      if (!bodyBuf || bodyBuf.length === 0) {
+      // Prefer raw bytes captured by the global express.json() verify hook
+      // in app.ts. Fall back to re-stringifying req.body if missing (e.g.
+      // non-JSON content type, or middleware order changed).
+      let bodyStr: string;
+      if (req.rawBody && req.rawBody.length > 0) {
+        bodyStr = req.rawBody.toString("utf8");
+      } else if (req.body && Object.keys(req.body as object).length > 0) {
+        bodyStr = JSON.stringify(req.body);
+        logger.warn("livekit_webhook_using_reserialized_body");
+      } else {
         res.status(200).send("ok");
         return;
       }
-      const bodyStr = bodyBuf.toString("utf8");
       const authHeader = req.header("authorization") ?? req.header("Authorization");
 
       const receiver = new WebhookReceiver(creds.apiKey, creds.apiSecret);

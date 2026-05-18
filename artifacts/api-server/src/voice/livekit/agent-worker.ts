@@ -9,7 +9,6 @@ import { randomUUID } from "crypto";
 // never touch the binding at all. `import type` is erased by the compiler
 // and does NOT trigger a runtime load.
 import type {
-  Room as RoomT,
   AudioFrame as AudioFrameT,
   RemoteTrack,
   RemoteTrackPublication,
@@ -63,7 +62,6 @@ import { isLlmProviderId, type LlmProviderId } from "../../services/llm/index.js
 const SAMPLE_RATE = 8000;
 const NUM_CHANNELS = 1;
 // 20 ms @ 8 kHz mono = 160 samples = 320 bytes (s16le)
-const FRAME_SAMPLES = 160;
 const FRAME_BYTES = 320;
 
 interface StartLiveKitAgentOptions {
@@ -362,7 +360,6 @@ async function doStartLiveKitAgent(
               }
             }
           }
-          void FRAME_SAMPLES; // referenced in comments above; silence lint
         }
       } catch (err) {
         if (!sentinelSession.stopped) {

@@ -11,6 +11,10 @@ export const leadStatusEnum = [
   "no_response",
   "callback",
   "dnc",
+  // Task #31 — leads synthesised by the in-browser Call Simulator. Never
+  // enqueued by the outbound dialer; exists only to satisfy the FK from
+  // calls→leads so production reports filter on status='simulator'.
+  "simulator",
 ] as const;
 
 export type LeadStatus = (typeof leadStatusEnum)[number];

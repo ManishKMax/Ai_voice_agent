@@ -145,9 +145,12 @@ export async function startSimulator(
     const roomName = `sim-${randomUUID().slice(0, 12)}`;
     const userIdentity = `user-${randomUUID().slice(0, 8)}`;
 
-    // 1) Create the simulator lead. Status stays "pending" — the enum
-    //    doesn't include a "simulator" value and we don't want to evict
-    //    it from the regular Leads table; analytics filters on source.
+    // 1) Create the simulator lead. status='simulator' keeps the outbound
+    //    dialer from ever picking it up, source='simulator' lets reports
+    //    filter, and tenant_id intentionally stays NULL — admin JWT users
+    //    are not bound to a tenant in this schema (only Clerk portal
+    //    users are). Synthesised leads are scoped only by ownerUserId on
+    //    the in-memory simulator session, not by tenant.
     const [lead] = await db
       .insert(leadsTable)
       .values({
@@ -155,6 +158,8 @@ export async function startSimulator(
         phone: leadPhone,
         source: "simulator",
         sourceId: callSid,
+        status: "simulator",
+        tenantId: null,
         notes: "Created by in-browser Call Simulator (Task #31)",
       })
       .returning();
@@ -305,7 +310,12 @@ export async function endSimulator(
     // before we touch it (prevents cross-tenant abuse via brute-forced
     // numeric IDs even when the in-memory map has been evicted).
     const [callRow] = await db
-      .select({ id: callsTable.id, source: callsTable.source, sid: callsTable.twilioCallSid })
+      .select({
+        id: callsTable.id,
+        source: callsTable.source,
+        sid: callsTable.twilioCallSid,
+        persistedTranscript: callsTable.transcript,
+      })
       .from(callsTable)
       .where(eq(callsTable.id, callId))
       .limit(1);
@@ -327,9 +337,31 @@ export async function endSimulator(
     // in-memory conversation state, so a fetch-after-disconnect would
     // return an empty transcript every time (code-review finding #2).
     const convBefore = callRow.sid ? getConvSession(callRow.sid) : undefined;
-    const transcript = (convBefore?.messages ?? [])
+    let transcript = (convBefore?.messages ?? [])
       .filter((m) => m.role !== "system")
-      .map((m) => ({ role: m.role, content: m.content }));
+      .map((m) => ({ role: m.role as string, content: m.content }));
+    // Fallback: if the in-memory conversation has already been evicted
+    // (operator refreshed the page, /end was retried, or the agent worker
+    // tore down before /end was authed) parse the persisted transcript
+    // off the call row. conversation-state.addTurn() writes lines as
+    // "Lead: …" / "Agent: …" — map "Lead"→user, "Agent"/"Assistant"→
+    // assistant. Also accept lowercase "user:"/"agent:"/"assistant:" for
+    // forward-compat with any future writer.
+    if (transcript.length === 0 && callRow.persistedTranscript) {
+      transcript = callRow.persistedTranscript
+        .split(/\r?\n/)
+        .map((ln) => ln.trim())
+        .filter((ln) => ln.length > 0)
+        .map((ln) => {
+          const m = /^(lead|user|agent|assistant)\s*:\s*(.+)$/i.exec(ln);
+          if (m && m[1] && m[2]) {
+            const tag = m[1].toLowerCase();
+            const role = tag === "lead" || tag === "user" ? "user" : "assistant";
+            return { role, content: m[2] };
+          }
+          return { role: "assistant", content: ln };
+        });
+    }
 
     if (entry) {
       const handle = getLiveKitAgent(entry.roomName);

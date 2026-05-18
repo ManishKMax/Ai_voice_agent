@@ -41,35 +41,54 @@ const LLM_PROVIDERS = [
   { id: "gemini", label: "Gemini 2.0 Flash" },
 ] as const;
 
-// Curated Sarvam Bulbul v3 voices. The top section is the recommended
-// shortlist for Hinglish (Hindi+English code-mix) conversations — these
-// voices were A/B-tested and sound the most natural pronouncing English
-// loanwords inside Hindi sentences. The rest follows below for variety.
-// Full list lives in replit.md ("Valid Sarvam voices for bulbul:v3").
+// Sarvam Bulbul v3 voices — verified against the server-side allowlist
+// (Sarvam returns the canonical list in its 400 error when an unknown
+// speaker is sent). DO NOT add voices that aren't in this list:
+//   aditya, ritu, ashutosh, priya, neha, rahul, pooja, rohan, simran,
+//   kavya, amit, dev, ishita, shreya, ratan, varun, manan, sumit, roopa,
+//   kabir, aayan, shubh, advait, anand, tanya, tarun, sunny, mani, gokul,
+//   vijay, shruti, suhani, mohit, kavitha, rehan, soham, rupali, niharika
+//
+// The ★ marks the curated Hinglish shortlist — voices that sound most
+// natural pronouncing English loanwords inside Hindi sentences in our
+// internal A/B listens. Default = shreya (warm + soft, the most
+// conversational of the list for sales-style outbound calls).
 const VOICE_OPTIONS = [
   // Best for Hinglish — top of the list on purpose.
-  { id: "manisha",  label: "Manisha — warmest, best for Hinglish ★" },
-  { id: "vidya",    label: "Vidya — soft, friendly, Hinglish ★" },
-  { id: "anushka",  label: "Anushka — clear, professional, Hinglish ★" },
-  { id: "arjun",    label: "Arjun — natural Hinglish male ★" },
-  { id: "karun",    label: "Karun — friendly Hinglish male ★" },
+  { id: "shreya",   label: "Shreya — soft, conversational ★ (default)" },
+  { id: "neha",     label: "Neha — bright, friendly ★" },
+  { id: "kavya",    label: "Kavya — calm, professional ★" },
+  { id: "simran",   label: "Simran — natural Hinglish ★" },
+  { id: "rohan",    label: "Rohan — natural male ★" },
+  { id: "kabir",    label: "Kabir — deep, calm male ★" },
   { id: "default",  label: "Use Agent default" },
   // Female (alternates)
   { id: "priya",    label: "Priya — warm" },
-  { id: "neha",     label: "Neha — bright, friendly" },
-  { id: "kavya",    label: "Kavya — calm, professional" },
-  { id: "shreya",   label: "Shreya — soft, conversational" },
   { id: "pooja",    label: "Pooja — confident" },
   { id: "ishita",   label: "Ishita — youthful" },
   { id: "ritu",     label: "Ritu — measured" },
   { id: "suhani",   label: "Suhani — expressive" },
+  { id: "tanya",    label: "Tanya" },
+  { id: "shruti",   label: "Shruti" },
+  { id: "rupali",   label: "Rupali" },
+  { id: "kavitha",  label: "Kavitha" },
+  { id: "roopa",    label: "Roopa" },
+  { id: "niharika", label: "Niharika" },
   // Male (alternates)
-  { id: "rohan",    label: "Rohan — natural" },
   { id: "aditya",   label: "Aditya — authoritative" },
   { id: "dev",      label: "Dev — friendly" },
-  { id: "kabir",    label: "Kabir — deep, calm" },
   { id: "shubh",    label: "Shubh — youthful" },
   { id: "varun",    label: "Varun — energetic" },
+  { id: "rahul",    label: "Rahul" },
+  { id: "amit",     label: "Amit" },
+  { id: "ashutosh", label: "Ashutosh" },
+  { id: "advait",   label: "Advait" },
+  { id: "anand",    label: "Anand" },
+  { id: "tarun",    label: "Tarun" },
+  { id: "sunny",    label: "Sunny" },
+  { id: "soham",    label: "Soham" },
+  { id: "rehan",    label: "Rehan" },
+  { id: "mohit",    label: "Mohit" },
 ] as const;
 
 // BCP-47 language codes Sarvam Bulbul v3 supports. Hindi is the default
@@ -193,7 +212,9 @@ export default function SimulatorPage() {
   // flip to hi-IN automatically whenever the reply contains Devanagari.
   // Default voice/language are tuned for Hinglish — see VOICE_OPTIONS /
   // LANGUAGE_OPTIONS for rationale. Operator can still pick anything else.
-  const [voice, setVoice] = useState<string>("manisha");
+  // (shreya is verified-real in Bulbul v3; earlier attempt at "manisha"
+  // crashed TTS with 400 because that voice isn't in Sarvam's catalog.)
+  const [voice, setVoice] = useState<string>("shreya");
   const [language, setLanguage] = useState<string>("hi-IN");
 
   const [starting, setStarting] = useState(false);

@@ -250,12 +250,38 @@ export function detectTtsLanguage(text: string, fallback: string): string {
   return fallback;
 }
 
+// Canonical Sarvam Bulbul v3 speaker allowlist — sourced directly from
+// the 400-error response Sarvam returns when an unknown speaker is sent
+// ("Available speakers for bulbul:v3 are: aditya, ritu, ..."). Keep this
+// in sync with the dashboard VOICE_OPTIONS list. The point of this set is
+// defence-in-depth: if a typo, stale agent_settings row, or future UI
+// regression sends an unknown voice, we substitute a known-good fallback
+// instead of letting Sarvam 400 and the caller hear silence.
+const BULBUL_V3_VOICES: ReadonlySet<string> = new Set([
+  "aditya", "ritu", "ashutosh", "priya", "neha", "rahul", "pooja", "rohan",
+  "simran", "kavya", "amit", "dev", "ishita", "shreya", "ratan", "varun",
+  "manan", "sumit", "roopa", "kabir", "aayan", "shubh", "advait", "anand",
+  "tanya", "tarun", "sunny", "mani", "gokul", "vijay", "shruti", "suhani",
+  "mohit", "kavitha", "rehan", "soham", "rupali", "niharika",
+]);
+const TTS_FALLBACK_VOICE = "shreya";
+
 export async function generateSpeech(
   text: string,
   cfg: AgentConfig,
   overrides?: { voice?: string; language?: string; targetSampleRateHz?: number },
 ): Promise<Buffer | null> {
-  const voice = overrides?.voice ?? cfg.voice;
+  const requestedVoice = overrides?.voice ?? cfg.voice;
+  // Validate against the known catalog; substitute fallback on miss so a
+  // bad config never causes silent calls. Log loudly so it gets noticed.
+  let voice = requestedVoice;
+  if (!BULBUL_V3_VOICES.has(voice)) {
+    logger.error(
+      { requestedVoice, fallback: TTS_FALLBACK_VOICE },
+      "sarvam_tts_voice_not_in_allowlist_using_fallback",
+    );
+    voice = TTS_FALLBACK_VOICE;
+  }
   // Always run script-detection so a Hindi reply on an `en-IN` agent still
   // sounds natural. Caller-supplied override still wins (e.g. simulator
   // explicitly set to "ta-IN" should stay Tamil even on an English greeting).

@@ -95,9 +95,16 @@ export async function startAgentInRoom(
       });
       return;
     }
-    const { roomName, leadId, llmProvider, callSid } = req.body as {
+    const {
+      roomName,
+      leadId,
+      llmProviderOverride,
+      llmProvider,
+      callSid,
+    } = req.body as {
       roomName?: string;
       leadId?: number | string;
+      llmProviderOverride?: string;
       llmProvider?: string;
       callSid?: string;
     };
@@ -111,10 +118,16 @@ export async function startAgentInRoom(
         : typeof leadId === "string" && leadId !== ""
           ? Number(leadId) || undefined
           : undefined;
+    // Spec field is `llmProviderOverride`; accept legacy `llmProvider` as a
+    // backward-compat alias so older clients keep working.
+    const overrideRaw =
+      typeof llmProviderOverride === "string" && llmProviderOverride
+        ? llmProviderOverride
+        : typeof llmProvider === "string"
+          ? llmProvider
+          : undefined;
     const provider =
-      typeof llmProvider === "string" && isLlmProviderId(llmProvider)
-        ? llmProvider
-        : undefined;
+      overrideRaw && isLlmProviderId(overrideRaw) ? overrideRaw : undefined;
     const handle = await startLiveKitAgent({
       roomName,
       leadId: leadIdNum,

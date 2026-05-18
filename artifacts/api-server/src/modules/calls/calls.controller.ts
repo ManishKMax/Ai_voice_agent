@@ -200,7 +200,7 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
       ? (req.query["llmProvider"] as string)
       : undefined;
     const extra = llmProvider ? { llmProvider } : undefined;
-    const { contentType, body } = provider.generateConnectResponse(leadId || undefined, extra);
+    const { contentType, body } = await provider.generateConnectResponse(leadId || undefined, extra);
     req.log.info(
       { leadId, callSid, pipeline, providerId: provider.id, llmProvider },
       "Voice webhook — routing to WS pipeline",
@@ -280,7 +280,7 @@ export async function voiceWebhookV2(req: Request, res: Response): Promise<void>
   // Provider-agnostic v2 webhook: the connect-response shape comes from the
   // per-tenant IvrProvider so an Exotel-flagged tenant doesn't get TwiML.
   const provider = await resolveProviderForLead(leadId);
-  const { contentType, body } = provider.generateConnectResponse(leadId || undefined);
+  const { contentType, body } = await provider.generateConnectResponse(leadId || undefined);
   req.log.info(
     { leadId, providerId: provider.id },
     "Voice v2 webhook — connecting to media stream",

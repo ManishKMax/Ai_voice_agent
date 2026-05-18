@@ -115,5 +115,5 @@ export interface IvrProvider {
   generateConnectResponse(
     leadId: number | undefined,
     extraParameters?: Record<string, string>,
-  ): { contentType: string; body: string };
+  ): Promise<{ contentType: string; body: string }> | { contentType: string; body: string };
 }

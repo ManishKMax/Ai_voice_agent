@@ -240,7 +240,20 @@ export class CallSession {
       // Resolve the per-tenant IVR adapter — Twilio for platform calls and
       // Twilio-flagged tenants, Exotel scaffold for Exotel-flagged tenants.
       // Fail-safe: any DB error keeps the Twilio default already on `this`.
-      if (this.leadId) {
+      // `forceProvider` is set by transports that own their own carrier
+      // identity (e.g. the LiveKit agent worker) and must NOT have the
+      // provider flipped to Twilio/Exotel by tenant-lookup. Without this
+      // guard, a LiveKit-backed session with a Twilio-flagged leadId would
+      // start decoding inbound PCM frames as μ-law and encoding outbound
+      // PCM as μ-law before captureFrame, producing distorted/invalid
+      // audio on the WebRTC track.
+      const forceProvider = this.session.customParameters["forceProvider"];
+      if (forceProvider) {
+        logger.info(
+          { call_id: this.session.callSid, providerId: this.provider.id, forceProvider },
+          "call_session_provider_forced",
+        );
+      } else if (this.leadId) {
         this.provider = await resolveProviderForLead(this.leadId);
         logger.info(
           { call_id: this.session.callSid, providerId: this.provider.id },

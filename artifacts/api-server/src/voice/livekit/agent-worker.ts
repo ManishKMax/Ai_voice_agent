@@ -156,7 +156,13 @@ async function doStartLiveKitAgent(
   // doesn't have an equivalent sync/discard primitive — barge-in is still
   // handled correctly because CallSession aborts its TTS loop locally on
   // its own (it doesn't rely on the carrier echoing a `mark`).
-  const customParameters: Record<string, string> = {};
+  const customParameters: Record<string, string> = {
+    // Pin the CallSession to the LiveKit provider — without this a Twilio-
+    // or Exotel-flagged tenant lookup on `leadId` would swap the provider
+    // mid-start and start μ-law-encoding outbound PCM into the WebRTC
+    // AudioSource, producing garbled audio on the browser side.
+    forceProvider: "livekit",
+  };
   if (opts.leadId != null && opts.leadId > 0) {
     customParameters["leadId"] = String(opts.leadId);
   }

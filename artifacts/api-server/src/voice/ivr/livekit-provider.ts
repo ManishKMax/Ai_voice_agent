@@ -1,4 +1,5 @@
 import { logger } from "../../lib/logger.js";
+import { mintLiveKitToken, getLiveKitCreds } from "../../services/livekit.service.js";
 import type { IvrEnvelope, IvrProvider } from "./types.js";
 
 /**
@@ -85,30 +86,57 @@ export class LiveKitProvider implements IvrProvider {
 
   // ── Webhook ──────────────────────────────────────────────────────────────
 
-  generateConnectResponse(
+  async generateConnectResponse(
     leadId: number | undefined,
     extraParameters?: Record<string, string>,
-  ): { contentType: string; body: string } {
-    // Phase-1 (Call Simulator) doesn't use this — the browser fetches the
-    // token via POST /api/voice/livekit/token directly. Phase-2 SIP bridge
-    // and inbound-call webhooks will invoke this from the /api/voice route.
-    // The payload is intentionally informational; the real join handshake
-    // happens via the LiveKit signalling URL once the client has a token.
-    const url = process.env["LIVEKIT_URL"] ?? "";
+  ): Promise<{ contentType: string; body: string }> {
+    // For LiveKit the carrier-equivalent "connect response" is a freshly
+    // minted participant join token plus the SFU signalling URL — the
+    // caller (Phase-2 SIP bridge / inbound webhook) hands these directly
+    // to its LiveKit client to enter the room. Phase-1 simulators still
+    // use POST /api/voice/livekit/token instead and ignore this body.
+    const creds = getLiveKitCreds();
     const roomName = leadId ? `lead-${leadId}` : `lk-${Date.now()}`;
+    if (!creds) {
+      logger.warn(
+        { leadId: leadId ?? null, providerId: this.id, roomName },
+        "livekit_connect_response_no_creds",
+      );
+      return {
+        contentType: "application/json",
+        body: JSON.stringify({
+          provider: "livekit",
+          roomName,
+          url: "",
+          token: null,
+          leadId: leadId ?? null,
+          extraParameters: extraParameters ?? {},
+          error:
+            "LiveKit not configured (LIVEKIT_API_KEY / LIVEKIT_API_SECRET / LIVEKIT_URL).",
+        }),
+      };
+    }
+    const identity = `caller-${leadId ?? "anon"}-${Date.now()}`;
+    const token = await mintLiveKitToken({
+      roomName,
+      identity,
+      name: leadId ? `lead-${leadId}` : identity,
+      ttlSeconds: 60 * 60,
+    });
     logger.info(
-      { leadId: leadId ?? null, providerId: this.id, roomName },
-      "livekit_connect_response_placeholder",
+      { leadId: leadId ?? null, providerId: this.id, roomName, identity },
+      "livekit_connect_response_minted",
     );
     return {
       contentType: "application/json",
       body: JSON.stringify({
         provider: "livekit",
         roomName,
-        url,
+        url: creds.url,
+        token,
+        identity,
         leadId: leadId ?? null,
         extraParameters: extraParameters ?? {},
-        note: "Phase 1: call POST /api/voice/livekit/token to mint a join token.",
       }),
     };
   }

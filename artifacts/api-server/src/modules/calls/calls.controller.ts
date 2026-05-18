@@ -193,6 +193,25 @@ export async function voiceWebhook(req: Request, res: Response): Promise<void> {
     // response (TwiML for Twilio, app-bazaar XML for Exotel, etc.).
     // resolveProviderForLead falls back to Twilio for unknown tenants.
     const provider = await resolveProviderForLead(leadId);
+    // Phase-1 LiveKit guard: this Twilio-flavoured webhook should never
+    // be reached by a LiveKit-backed lead (dispatchCall throws before any
+    // outbound call is placed, and the simulator joins LiveKit rooms
+    // directly without hitting /api/voice). But if an operator flips a
+    // tenant to telephony_provider=livekit while a stale Twilio webhook
+    // is in flight, returning a JSON/empty body would have Twilio play
+    // its generic "application error" message to the caller. Return a
+    // 503 with a clear plain-text reason so the misconfiguration shows
+    // up in Twilio's debugger panel.
+    if (provider.id === "livekit") {
+      req.log.warn(
+        { leadId, callSid, providerId: provider.id },
+        "voice_webhook_blocked_livekit_not_supported_on_pstn",
+      );
+      res.status(503)
+        .type("text/plain")
+        .send("LiveKit transport is browser-only in Phase 1 — no PSTN bridge yet. Set tenant.telephony_provider to twilio or exotel for outbound calls.");
+      return;
+    }
     // Task #28: forward per-call llmProvider override (set by simulator
     // on the voice URL query string) into the stream's customParameters,
     // where CallSession picks it up.
@@ -280,6 +299,16 @@ export async function voiceWebhookV2(req: Request, res: Response): Promise<void>
   // Provider-agnostic v2 webhook: the connect-response shape comes from the
   // per-tenant IvrProvider so an Exotel-flagged tenant doesn't get TwiML.
   const provider = await resolveProviderForLead(leadId);
+  if (provider.id === "livekit") {
+    req.log.warn(
+      { leadId, providerId: provider.id },
+      "voice_webhook_v2_blocked_livekit_not_supported_on_pstn",
+    );
+    res.status(503)
+      .type("text/plain")
+      .send("LiveKit transport is browser-only in Phase 1 — no PSTN bridge yet.");
+    return;
+  }
   const { contentType, body } = await provider.generateConnectResponse(leadId || undefined);
   req.log.info(
     { leadId, providerId: provider.id },

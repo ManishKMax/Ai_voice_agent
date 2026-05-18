@@ -249,6 +249,10 @@ export class CallSession {
       // audio on the WebRTC track.
       const forceProvider = this.session.customParameters["forceProvider"];
       if (forceProvider) {
+        // Actually pin the provider — logging without setting was a silent
+        // bug that left `this.provider` on the Twilio default for LiveKit
+        // sessions. getIvrProvider falls back to Twilio for unknown ids.
+        this.provider = getIvrProvider(forceProvider);
         logger.info(
           { call_id: this.session.callSid, providerId: this.provider.id, forceProvider },
           "call_session_provider_forced",

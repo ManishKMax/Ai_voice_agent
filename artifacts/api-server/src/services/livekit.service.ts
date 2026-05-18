@@ -102,6 +102,6 @@ export async function probeLiveKit(): Promise<void> {
       "livekit_probe: OK (token signed successfully)",
     );
   } catch (err) {
-    logger.warn({ err: (err as Error).message }, "livekit_probe_failed");
+    logger.warn({ err: (err as Error).message }, "livekit_probe: FAILED");
   }
 }

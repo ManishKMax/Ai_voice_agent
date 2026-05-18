@@ -136,12 +136,19 @@ export function buildSystemPrompt(cfg: AgentConfig, leadName?: string, greetingT
     ? `You have already opened the call with: "${greetingText}"`
     : `You are beginning the call now.`;
 
-  // For Indian languages (hi-IN and en-IN), default to Hinglish replies —
-  // matches how real Indian sales calls flow and is what sarvam-30b produces
-  // most naturally. Other languages stick to the configured language.
+  // For Indian languages (hi-IN and en-IN), reply in natural Hinglish —
+  // mixing Hindi + English the way Indians actually speak on phone. The
+  // CRITICAL detail: write Hindi words in DEVANAGARI script, English words
+  // in Latin. The TTS voice (Sarvam Bulbul v3) auto-detects script and
+  // routes Devanagari to the Hindi voice model (natural pronunciation) and
+  // Latin to the English voice model (natural pronunciation of English
+  // loanwords). Romanised Hindi like "samajh gayi" or "bataa deti hoon"
+  // gets read letter-by-letter by the English model and sounds broken —
+  // that was the previous default and we explicitly reversed it after
+  // user feedback that pronunciation was unintelligible.
   const isIndian = cfg.language === "hi-IN" || cfg.language === "en-IN";
   const languageRule = isIndian
-    ? `Reply in natural Hinglish (mix Hindi + English the way Indians actually speak on phone). Never use Devanagari script — write Hindi words in Roman/English letters so the voice system can speak them.`
+    ? `Reply in natural Hinglish. Write Hindi/Hindi-origin words in DEVANAGARI script (e.g. "समझ गई", "बता देती हूँ", "ठीक है"). Write English/loanwords in Latin script (e.g. "demo", "CRM", "schedule", "meeting"). NEVER write Hindi words in Roman letters — that breaks pronunciation. Example good reply: "समझ गई। Demo schedule कर देती हूँ।"`
     : `Reply in ${cfg.language}.`;
 
   return `You are ${cfg.name}, a fast voice sales agent from ${cfg.companyName}.

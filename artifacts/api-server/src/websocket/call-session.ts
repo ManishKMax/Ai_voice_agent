@@ -179,6 +179,7 @@ export class CallSession {
   private botSpeakingEndMs: number | null = null;
   private listeningStartMs: number | null = null;
   private flushStartMs: number | null = null;
+  private lastTurnContext: Record<string, unknown> | null = null;
 
   // Lifecycle flags / timers
   private cancelled = false;
@@ -732,10 +733,20 @@ export class CallSession {
       silence_timeout_reason: reason,
       sarvam_ws_errors: sttErr,
     };
+    // STT-only context log. The canonical `call_session_turn` event is
+    // emitted later in flushAndProcess once LLM+TTS metrics are known, so
+    // downstream consumers can rely on a single event with all 13 fields.
     logger.info(
       { ...turnLog, stt_attempts: sttAttempts, stt_used_warm_socket: sttUsedWarmSocket },
-      "call_session_turn",
+      "call_session_stt_complete",
     );
+    // Stash the turn context so we can fold it into the final
+    // `call_session_turn` payload (single canonical emission contract).
+    this.lastTurnContext = {
+      ...turnLog,
+      stt_attempts: sttAttempts,
+      stt_used_warm_socket: sttUsedWarmSocket,
+    };
 
     if (this.cancelled) return;
 
@@ -829,20 +840,27 @@ export class CallSession {
       // non-streaming providers (synthetic, per task #29 spec).
       const llmFirstTokenMs =
         providerFirstTokenMs != null ? Math.max(0, Math.round(providerFirstTokenMs)) : llmLatencyMs;
-      // tokens/sec computed from output tokens & elapsed seconds; null when
-      // the provider didn't return usage (Sarvam currently).
+      // Real wall-clock at which the first token landed; used as the
+      // baseline for first_word_trigger_ms and the divisor for tokens/sec
+      // (only the post-first-token generation window counts).
+      const llmFirstTokenAtMs = llmRequestSentAtMs + llmFirstTokenMs;
+      const llmGenerationMs = Math.max(1, llmLatencyMs - llmFirstTokenMs);
+      // tokens/sec is "completion tokens emitted per second of generation
+      // after first token", per task #29 spec. Null when the provider
+      // didn't return usage (Sarvam currently).
       const llmTokensPerSec =
-        completionTokens && llmLatencyMs > 0
-          ? +(completionTokens / (llmLatencyMs / 1000)).toFixed(2)
-          : null;
+        completionTokens ? +(completionTokens / (llmGenerationMs / 1000)).toFixed(2) : null;
 
       const firstFrameAtMs = ttsTimings?.firstFrameAtMs ?? null;
       const lastFrameAtMs  = ttsTimings?.lastFrameAtMs  ?? null;
       const ttsRequestAtMs = ttsTimings?.ttsRequestAtMs ?? null;
       const ttsFirstByteAtMs = ttsTimings?.ttsFirstByteAtMs ?? null;
 
+      // first_word_trigger_ms = time from LLM's first token to TTS request
+      // dispatch. For non-streaming providers first-token == complete, so
+      // this equals the time we spent buffering after the LLM call returned.
       const firstWordTriggerMs =
-        ttsRequestAtMs != null ? Math.max(0, Math.round(ttsRequestAtMs - llmCompleteAtMs)) : null;
+        ttsRequestAtMs != null ? Math.max(0, Math.round(ttsRequestAtMs - llmFirstTokenAtMs)) : null;
       const ttsStreamStartMs =
         ttsRequestAtMs != null && ttsFirstByteAtMs != null
           ? Math.max(0, Math.round(ttsFirstByteAtMs - ttsRequestAtMs))
@@ -880,8 +898,12 @@ export class CallSession {
         livekit_transport_ms: null as number | null,
       };
 
+      // Single canonical `call_session_turn` event — fold the STT context
+      // captured earlier with the LLM + TTS metrics so live tail consumers
+      // get one payload with all 13 fields + transcript/turn context.
       logger.info(
         {
+          ...(this.lastTurnContext ?? {}),
           call_id: this.session.callSid,
           turn_id: this.turnId,
           llm_provider: chatProvider,
@@ -890,6 +912,7 @@ export class CallSession {
         },
         "call_session_turn",
       );
+      this.lastTurnContext = null;
 
       // Resolve the DB call id from the Twilio call SID and persist.
       // Fire-and-forget; no await — the call session continues immediately.

@@ -70,6 +70,7 @@ export async function getLatencyAggregates(q: LatencyAggregateQuery) {
   const numericCols = [
     "stt_latency_ms",
     "llm_first_token_ms",
+    "llm_tokens_per_sec",
     "first_word_trigger_ms",
     "tts_stream_start_ms",
     "first_playback_ms",
@@ -86,6 +87,8 @@ export async function getLatencyAggregates(q: LatencyAggregateQuery) {
     sql.raw(`percentile_cont(0.95) within group (order by ${col}) as ${col}_p95`),
     sql.raw(`percentile_cont(0.99) within group (order by ${col}) as ${col}_p99`),
   ]);
+  // Keep _avg alongside percentiles for tokens/sec — the widget defaults
+  // to avg for that metric since percentiles of throughput are less useful.
   exprs.push(sql.raw(`avg(llm_tokens_per_sec) as llm_tokens_per_sec_avg`));
 
   const rows = await db.execute<Record<string, number | string | null>>(sql`

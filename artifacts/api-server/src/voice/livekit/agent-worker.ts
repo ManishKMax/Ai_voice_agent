@@ -1,17 +1,19 @@
 import { randomUUID } from "crypto";
-import {
-  Room,
-  RoomEvent,
-  AudioStream,
-  AudioSource,
-  AudioFrame,
-  LocalAudioTrack,
-  TrackKind,
-  TrackSource,
-  TrackPublishOptions,
-  type RemoteTrack,
-  type RemoteTrackPublication,
-  type RemoteParticipant,
+// IMPORTANT: do NOT statically import @livekit/rtc-node here. The package
+// loads native bindings (FFI to a Rust SDK) at import time, which can fail
+// on Twilio-only deployments where the prebuilt binary isn't compatible
+// with the host (musl vs glibc, ARM vs x64, etc.). Pulling it in lazily
+// inside `doStartLiveKitAgent` means: (a) `livekit.routes.ts` mounting
+// causes zero native-load risk at boot, and (b) operators who set
+// `LIVEKIT_AGENT_INPROCESS=false` (the default when LIVEKIT_URL is unset)
+// never touch the binding at all. `import type` is erased by the compiler
+// and does NOT trigger a runtime load.
+import type {
+  Room as RoomT,
+  AudioFrame as AudioFrameT,
+  RemoteTrack,
+  RemoteTrackPublication,
+  RemoteParticipant,
 } from "@livekit/rtc-node";
 import { logger } from "../../lib/logger.js";
 import { CallSession } from "../../websocket/call-session.js";
@@ -122,6 +124,44 @@ async function doStartLiveKitAgent(
       "LiveKit not configured. Set LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL.",
     );
   }
+  // Optional kill-switch — lets ops disable the in-process agent worker
+  // even when LiveKit creds are present (useful when rolling out Phase 2
+  // SIP routing while keeping creds around for the simulator token route).
+  // Default ON when creds are configured.
+  const inproc = process.env["LIVEKIT_AGENT_INPROCESS"];
+  if (inproc !== undefined && inproc !== "true" && inproc !== "1") {
+    throw new Error(
+      "LiveKit in-process agent disabled by LIVEKIT_AGENT_INPROCESS env var.",
+    );
+  }
+  // Lazy native load — see top-of-file comment. If the binding fails (wrong
+  // libc / missing prebuilt) we throw a clean error so the caller returns a
+  // 500 with an actionable message; Twilio paths are completely unaffected
+  // because they never reach this code path.
+  let rtc: typeof import("@livekit/rtc-node");
+  try {
+    rtc = await import("@livekit/rtc-node");
+  } catch (err) {
+    logger.error(
+      { err: (err as Error).message },
+      "livekit_rtc_node_load_failed",
+    );
+    throw new Error(
+      "Failed to load @livekit/rtc-node native bindings — LiveKit transport unavailable on this host. " +
+      "Twilio/Exotel calls are not affected.",
+    );
+  }
+  const {
+    Room,
+    RoomEvent,
+    AudioStream,
+    AudioSource,
+    AudioFrame,
+    LocalAudioTrack,
+    TrackKind,
+    TrackSource,
+    TrackPublishOptions,
+  } = rtc;
 
   const callSid = opts.callSid ?? `LKSIM${randomUUID().replace(/-/g, "").slice(0, 28)}`;
   const streamSid = `MZ${randomUUID().replace(/-/g, "").slice(0, 30)}`;
@@ -239,7 +279,7 @@ async function doStartLiveKitAgent(
   // Track inbound-stream readers so teardown can cancel them. Without
   // cancellation the AudioStream readable will keep the room alive even
   // after Room.disconnect() returns.
-  const inboundReaders: ReadableStreamDefaultReader<AudioFrame>[] = [];
+  const inboundReaders: ReadableStreamDefaultReader<AudioFrameT>[] = [];
 
   let torndown = false;
   // Forward declaration so teardown can be invoked before `handle` is built.

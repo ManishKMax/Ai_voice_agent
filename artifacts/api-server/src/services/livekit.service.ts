@@ -121,9 +121,13 @@ export async function mintLiveKitToken(opts: MintTokenOptions): Promise<string> 
     canPublish: opts.canPublish ?? true,
     canSubscribe: opts.canSubscribe ?? true,
     canPublishData: true,
-    // Agents typically join hidden so they don't show up in participant
-    // lists in the simulator UI. Browser users join visible by default.
-    hidden: opts.isAgent ?? false,
+    // NOTE: we intentionally do NOT set hidden:true for agents. Hidden
+    // participants make livekit-client throw "Tried to add a track for a
+    // participant, that's not present" on every track that arrives from
+    // them, which breaks the Call Simulator's audio playback. Callers
+    // can still pass hidden via metadata if needed in the future, but the
+    // default for agents is visible.
+    hidden: false,
   });
   return at.toJwt();
 }

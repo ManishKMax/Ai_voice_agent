@@ -193,7 +193,14 @@ async function doStartLiveKitAgent(
     roomName: opts.roomName,
     identity: agentIdentity,
     name: "AI Agent",
-    isAgent: true,
+    // IMPORTANT: do NOT mark the agent as hidden. livekit-client (v1.11+)
+    // raises "Tried to add a track for a participant, that's not present"
+    // when a track arrives from a hidden peer and refuses to fire
+    // TrackSubscribed — so the simulator UI hears nothing even though the
+    // agent is publishing TTS audio correctly. The SIP/PSTN path doesn't
+    // care about visibility (no browser is in the room), so visible is
+    // safe for both transports.
+    isAgent: false,
     ttlSeconds: 60 * 60,
   });
 

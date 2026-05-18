@@ -164,6 +164,13 @@ export default function SimulatorPage() {
   const [connected, setConnected] = useState(false);
   const [micMuted, setMicMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Audio playback diagnostics. Browsers (especially Safari + locked-down
+  // Chrome) can refuse to auto-play a remote MediaStream even after a user
+  // click if the click handler resolved an async chain before the play()
+  // happened. We surface "audio blocked" as a clickable button so the
+  // operator can manually unblock instead of silently hearing nothing.
+  const [agentTrackAttached, setAgentTrackAttached] = useState(false);
+  const [audioBlocked, setAudioBlocked] = useState(false);
 
   const [transcript, setTranscript] = useState<TranscriptTurn[]>([]);
   const [currentMetrics, setCurrentMetrics] = useState<MetricRow | null>(null);
@@ -192,6 +199,23 @@ export default function SimulatorPage() {
     try { await roomRef.current?.disconnect(); } catch { /* ignore */ }
     roomRef.current = null;
     setConnected(false);
+    setAgentTrackAttached(false);
+    setAudioBlocked(false);
+  }, []);
+
+  /** Operator clicked "Enable audio" — call play() from inside the
+   *  synchronous click handler so the browser counts it as a user
+   *  gesture and lifts the autoplay block. */
+  const handleEnableAudio = useCallback(() => {
+    const el = audioElRef.current;
+    if (!el) return;
+    el.muted = false;
+    el.volume = 1.0;
+    el.play()
+      .then(() => setAudioBlocked(false))
+      .catch((err: Error) => {
+        setError(`Audio still blocked: ${err.message}. Check browser audio settings.`);
+      });
   }, []);
 
   const handleEnd = useCallback(async () => {
@@ -313,8 +337,34 @@ export default function SimulatorPage() {
         _pub: RemoteTrackPublication,
         _participant: RemoteParticipant,
       ) => {
-        if (track.kind === Track.Kind.Audio && audioElRef.current) {
-          track.attach(audioElRef.current);
+        if (track.kind !== Track.Kind.Audio) return;
+        const el = audioElRef.current;
+        if (!el) return;
+        // attach() wires the MediaStream onto our <audio>. We then call
+        // .play() explicitly and catch the autoplay rejection so the UI
+        // can surface a manual "Enable audio" button. Without this, the
+        // agent speaks but the operator hears nothing on locked-down
+        // browsers and there's no visible failure mode.
+        track.attach(el);
+        el.volume = 1.0;
+        el.muted = false;
+        setAgentTrackAttached(true);
+        const tryPlay = () => el.play()
+          .then(() => setAudioBlocked(false))
+          .catch((err: Error) => {
+            // NotAllowedError / NotSupportedError both end up here.
+            // Don't error-out the call — just expose the "Enable audio"
+            // button (handler below calls audioElRef.current.play() from
+            // inside a synchronous click, which always satisfies the
+            // browser's user-gesture requirement).
+            console.warn("[simulator] audio autoplay blocked:", err.message);
+            setAudioBlocked(true);
+          });
+        tryPlay();
+      });
+      room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
+        if (track.kind === Track.Kind.Audio) {
+          setAgentTrackAttached(false);
         }
       });
       room.on(RoomEvent.Disconnected, () => {
@@ -418,6 +468,25 @@ export default function SimulatorPage() {
             <PhoneCall className="h-5 w-5" /> Call Simulator
             {connected && <Badge variant="default" className="ml-2 bg-emerald-500">Live</Badge>}
             {session && !connected && <Badge variant="secondary" className="ml-2">Connecting…</Badge>}
+            {connected && (
+              <Badge
+                variant={agentTrackAttached ? "default" : "secondary"}
+                className={agentTrackAttached ? "ml-2 bg-blue-500" : "ml-2"}
+                title={agentTrackAttached ? "Agent voice track subscribed" : "Waiting for agent to publish audio…"}
+              >
+                {agentTrackAttached ? "Agent audio ✓" : "Waiting for agent…"}
+              </Badge>
+            )}
+            {audioBlocked && (
+              <Button
+                size="sm"
+                variant="destructive"
+                className="ml-2"
+                onClick={handleEnableAudio}
+              >
+                🔊 Click to enable audio
+              </Button>
+            )}
           </CardTitle>
         </CardHeader>
         <CardContent>

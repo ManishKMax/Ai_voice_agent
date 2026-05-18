@@ -4,6 +4,8 @@ import {
   agentConfig,
   updateAgentConfig,
   buildSystemPrompt,
+  buildGreetingText,
+  defaultGreetingTemplate,
   SARVAM_VOICES,
   SARVAM_LANGUAGES,
 } from "../../config/agent.config.js";
@@ -14,6 +16,12 @@ export function getAgentConfigHandler(req: AuthRequest, res: Response): void {
   res.json({
     config: agentConfig,
     computedSystemPrompt: buildSystemPrompt(agentConfig, "<lead name>"),
+    // Default template shown as placeholder in the Settings UI so users
+    // see what the agent says when they leave the field blank.
+    defaultGreetingTemplate: defaultGreetingTemplate(agentConfig),
+    // Live preview of the greeting that will be spoken (placeholders
+    // already substituted) — lets users hear/read the result before save.
+    computedGreeting: buildGreetingText(agentConfig, "<lead name>"),
     voices: SARVAM_VOICES,
     languages: SARVAM_LANGUAGES,
   });
@@ -44,6 +52,12 @@ export async function updateAgentConfigHandler(req: AuthRequest, res: Response):
     } else if (typeof body.customSystemPrompt === "string") {
       patch.customSystemPrompt = body.customSystemPrompt;
     }
+    // Greeting template: empty string / null both mean "use default".
+    if (body.greetingTemplate === null || body.greetingTemplate === "") {
+      patch.greetingTemplate = null;
+    } else if (typeof body.greetingTemplate === "string") {
+      patch.greetingTemplate = body.greetingTemplate;
+    }
 
     const updated = await updateAgentConfig(patch);
     logger.info({ name: updated.name, voice: updated.voice }, "Agent config updated via API");
@@ -51,6 +65,8 @@ export async function updateAgentConfigHandler(req: AuthRequest, res: Response):
     res.json({
       config: updated,
       computedSystemPrompt: buildSystemPrompt(updated, "<lead name>"),
+      defaultGreetingTemplate: defaultGreetingTemplate(updated),
+      computedGreeting: buildGreetingText(updated, "<lead name>"),
     });
   } catch (err) {
     logger.error({ err }, "Failed to update agent config");

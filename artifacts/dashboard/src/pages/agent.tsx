@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Bot, Volume2, Save, RefreshCw, RotateCcw, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ interface AgentConfig {
   productName: string;
   maxTurns: number;
   customSystemPrompt: string | null;
+  greetingTemplate: string | null;
 }
 
 interface VoiceOption { value: string; label: string; }
@@ -62,6 +63,14 @@ export default function AgentSettings() {
   const [useCustomPrompt, setUseCustomPrompt] = useState(false);
   const [customPrompt, setCustomPrompt] = useState("");
 
+  // Greeting editor — the opening line the agent says when the lead
+  // picks up. `defaultGreeting` (server-rendered template for the
+  // currently SAVED tone/language) is shown as the textarea placeholder
+  // so users see "blank = use the default". The live preview itself is
+  // computed client-side from current unsaved form state so it updates
+  // as the user types (server only knows about saved values).
+  const [defaultGreeting, setDefaultGreeting] = useState("");
+
   async function loadConfig() {
     setLoading(true);
     try {
@@ -69,6 +78,8 @@ export default function AgentSettings() {
       const data = await res.json() as {
         config: AgentConfig;
         computedSystemPrompt: string;
+        defaultGreetingTemplate: string;
+        computedGreeting: string;
         voices: VoiceOption[];
         languages: LangOption[];
       };
@@ -76,6 +87,7 @@ export default function AgentSettings() {
       setVoices(data.voices);
       setLanguages(data.languages);
       setComputedPrompt(data.computedSystemPrompt);
+      setDefaultGreeting(data.defaultGreetingTemplate);
       setPreviewVoice(data.config.voice);
       setPreviewLang(data.config.language);
       setPreviewText(`Hello! This is ${data.config.name} from ${data.config.companyName}. How are you today?`);
@@ -95,17 +107,28 @@ export default function AgentSettings() {
     if (!config) return;
     setSaving(true);
     try {
-      const payload: Partial<AgentConfig> & { customSystemPrompt?: string | null } = {
+      const payload: Partial<AgentConfig> & {
+        customSystemPrompt?: string | null;
+        greetingTemplate?: string | null;
+      } = {
         ...config,
         customSystemPrompt: useCustomPrompt ? customPrompt : null,
+        // Empty string → server treats as "use built-in default".
+        greetingTemplate: config.greetingTemplate?.trim() ? config.greetingTemplate : null,
       };
       const res = await apiCall("/api/agent-config", {
         method: "PATCH",
         body: JSON.stringify(payload),
       });
-      const data = await res.json() as { config: AgentConfig; computedSystemPrompt: string };
+      const data = await res.json() as {
+        config: AgentConfig;
+        computedSystemPrompt: string;
+        defaultGreetingTemplate: string;
+        computedGreeting: string;
+      };
       setConfig(data.config);
       setComputedPrompt(data.computedSystemPrompt);
+      setDefaultGreeting(data.defaultGreetingTemplate);
       toast({ title: "Agent settings saved", description: "Changes will apply to the next call." });
     } catch {
       toast({ title: "Failed to save settings", variant: "destructive" });
@@ -142,6 +165,24 @@ export default function AgentSettings() {
   function updateConfig(patch: Partial<AgentConfig>) {
     setConfig((c) => c ? { ...c, ...patch } : c);
   }
+
+  // Live preview of the spoken greeting using current (possibly unsaved)
+  // form state. Mirrors `buildGreetingText` + `fillGreetingTemplate` on
+  // the server: same four placeholders, same null/empty → default
+  // fallback, same 200-char ceiling. Lead name is a fixed example since
+  // the real value only exists at call time.
+  const computedGreeting = useMemo(() => {
+    if (!config) return "";
+    const template = config.greetingTemplate?.trim() ? config.greetingTemplate : defaultGreeting;
+    if (!template) return "";
+    const filled = template
+      .replaceAll("{leadName}", "<lead name>")
+      .replaceAll("{agentName}", config.name)
+      .replaceAll("{companyName}", config.companyName)
+      .replaceAll("{productName}", config.productName)
+      .trim();
+    return filled.length > 200 ? filled.slice(0, 200) : filled;
+  }, [config, defaultGreeting]);
 
   if (loading) {
     return (
@@ -212,6 +253,43 @@ export default function AgentSettings() {
               onChange={e => updateConfig({ productName: e.target.value })}
               placeholder="e.g. CRM Suite"
             />
+          </div>
+
+          <div className="space-y-2 sm:col-span-2">
+            <div className="flex items-center justify-between">
+              <Label>Opening Line (Greeting)</Label>
+              {config.greetingTemplate?.trim() && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => updateConfig({ greetingTemplate: null })}
+                >
+                  <RotateCcw className="h-3 w-3 mr-1" />
+                  Reset to default
+                </Button>
+              )}
+            </div>
+            <Textarea
+              value={config.greetingTemplate ?? ""}
+              onChange={e => updateConfig({ greetingTemplate: e.target.value })}
+              rows={3}
+              placeholder={defaultGreeting}
+              className="text-sm"
+            />
+            <p className="text-xs text-muted-foreground">
+              First thing the agent says when the lead picks up. Leave blank to use the default shown above.
+              Use placeholders <code className="px-1 rounded bg-muted">{"{leadName}"}</code>,{" "}
+              <code className="px-1 rounded bg-muted">{"{agentName}"}</code>,{" "}
+              <code className="px-1 rounded bg-muted">{"{companyName}"}</code>,{" "}
+              <code className="px-1 rounded bg-muted">{"{productName}"}</code>.
+            </p>
+            {computedGreeting && (
+              <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs">
+                <span className="font-medium text-muted-foreground">Preview: </span>
+                <span>{computedGreeting}</span>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

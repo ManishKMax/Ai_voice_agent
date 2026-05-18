@@ -15,6 +15,11 @@ export interface AgentConfig {
   productName: string;
   maxTurns: number;
   customSystemPrompt: string | null;
+  /**
+   * Editable opening line. Null = built-in default. Supports placeholders:
+   * {leadName}, {agentName}, {companyName}, {productName}.
+   */
+  greetingTemplate: string | null;
   /** Active LLM provider for live conversation. Default "sarvam". */
   llmProviderId: LlmProviderId;
   /** Per-provider credentials (apiKey + optional model). */
@@ -49,6 +54,7 @@ function defaultConfig(): AgentConfig {
     productName: process.env.PRODUCT_NAME ?? "CRM Suite",
     maxTurns: parseInt(process.env.AGENT_MAX_TURNS ?? "6"),
     customSystemPrompt: null,
+    greetingTemplate: null,
     llmProviderId: "sarvam",
     llmCredentials: {},
   };
@@ -75,6 +81,7 @@ export async function loadAgentConfig(): Promise<void> {
         productName: stored.productName ?? agentConfig.productName,
         maxTurns: typeof stored.maxTurns === "number" ? stored.maxTurns : agentConfig.maxTurns,
         customSystemPrompt: stored.customSystemPrompt ?? null,
+        greetingTemplate: stored.greetingTemplate ?? null,
         llmProviderId: parseLlmId(stored.llmProviderId),
         llmCredentials: (stored.llmCredentials ?? {}) as LlmCredentialsMap,
       };
@@ -106,7 +113,27 @@ export async function updateAgentConfig(patch: Partial<AgentConfig>): Promise<Ag
   return agentConfig;
 }
 
-export function buildGreetingText(cfg: AgentConfig, leadName: string): string {
+/**
+ * Substitute the four supported placeholders into a greeting template.
+ * Trims to a HARD 200-char ceiling so a runaway template can't blow up
+ * TTS latency or cause dead-air at call start.
+ */
+function fillGreetingTemplate(template: string, cfg: AgentConfig, leadName: string): string {
+  const filled = template
+    .replaceAll("{leadName}", leadName)
+    .replaceAll("{agentName}", cfg.name)
+    .replaceAll("{companyName}", cfg.companyName)
+    .replaceAll("{productName}", cfg.productName)
+    .trim();
+  return filled.length > 200 ? filled.slice(0, 200) : filled;
+}
+
+/**
+ * Built-in fallback greeting for when no template is configured. Kept in
+ * its own helper so `agent.controller.ts` can show it as a placeholder in
+ * the Settings UI ("here's what we'd say by default").
+ */
+export function defaultGreetingTemplate(cfg: AgentConfig): string {
   // Keep the greeting SHORT (~10 words) so TTS finishes in ~2s instead of ~5-6s.
   // Long greetings caused dead-air at the start of every call.
   //
@@ -118,16 +145,26 @@ export function buildGreetingText(cfg: AgentConfig, leadName: string): string {
   const isIndian = cfg.language === "hi-IN" || cfg.language === "en-IN";
   if (isIndian) {
     return cfg.tone === "professional"
-      ? `Hi ${leadName} ji, मैं ${cfg.name} बोल रही हूँ ${cfg.companyName} से। एक मिनट है आपके पास?`
+      ? `Hi {leadName} ji, मैं {agentName} बोल रही हूँ {companyName} से। एक मिनट है आपके पास?`
       : cfg.tone === "casual"
-      ? `Hi ${leadName}, ${cfg.name} this side, ${cfg.companyName} से। एक minute हो सकता है?`
-      : `Hello ${leadName} ji, ${cfg.name} from ${cfg.companyName}. एक छोटा सा बात करनी थी, time है?`;
+      ? `Hi {leadName}, {agentName} this side, {companyName} से। एक minute हो सकता है?`
+      : `Hello {leadName} ji, {agentName} from {companyName}. एक छोटा सा बात करनी थी, time है?`;
   }
   return cfg.tone === "professional"
-    ? `Hi ${leadName}, this is ${cfg.name} from ${cfg.companyName}. Got a minute?`
+    ? `Hi {leadName}, this is {agentName} from {companyName}. Got a minute?`
     : cfg.tone === "casual"
-    ? `Hey ${leadName}, ${cfg.name} from ${cfg.companyName} here. You free?`
-    : `Hi ${leadName}! ${cfg.name} from ${cfg.companyName}. Got a quick minute?`;
+    ? `Hey {leadName}, {agentName} from {companyName} here. You free?`
+    : `Hi {leadName}! {agentName} from {companyName}. Got a quick minute?`;
+}
+
+export function buildGreetingText(cfg: AgentConfig, leadName: string): string {
+  // User-configured template wins; otherwise fall back to the built-in
+  // tone-based default. Both paths share the same placeholder system.
+  const template =
+    cfg.greetingTemplate && cfg.greetingTemplate.trim()
+      ? cfg.greetingTemplate
+      : defaultGreetingTemplate(cfg);
+  return fillGreetingTemplate(template, cfg, leadName);
 }
 
 export function buildSystemPrompt(cfg: AgentConfig, leadName?: string, greetingText?: string): string {

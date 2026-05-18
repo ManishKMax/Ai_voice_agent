@@ -18,6 +18,12 @@ export interface StoredAgentConfig {
   productName: string;
   maxTurns: number;
   customSystemPrompt: string | null;
+  /**
+   * Editable opening line spoken at the start of every call. Supports
+   * {leadName}, {agentName}, {companyName}, {productName} placeholders.
+   * Null = use the built-in tone-based Hinglish/English default.
+   */
+  greetingTemplate?: string | null;
   llmProviderId?: LlmProviderId;
   llmCredentials?: LlmCredentialsMap;
 }

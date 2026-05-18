@@ -271,6 +271,75 @@ export interface AnalyzeCallResponse {
   callId: number;
 }
 
+export interface LlmProviderRow {
+  id: string;
+  label: string;
+  model: string;
+  defaultModel: string;
+  apiKeyMasked: string;
+  configured: boolean;
+}
+
+export type LlmSettingsResponseData = {
+  activeProviderId: string;
+  providers: LlmProviderRow[];
+};
+
+export interface LlmSettingsResponse {
+  success: boolean;
+  data: LlmSettingsResponseData;
+}
+
+export type PatchLlmSettingsRequestCredentials = {
+  [key: string]: {
+    apiKey?: string;
+    model?: string;
+  };
+};
+
+export interface PatchLlmSettingsRequest {
+  activeProviderId?: string;
+  credentials?: PatchLlmSettingsRequestCredentials;
+}
+
+export interface TestLlmProviderRequest {
+  providerId: string;
+  apiKey?: string;
+  model?: string;
+}
+
+export type TestProviderResponseData = { [key: string]: unknown };
+
+export interface TestProviderResponse {
+  success: boolean;
+  message?: string;
+  data?: TestProviderResponseData;
+}
+
+export type TelephonySettingsResponseData = {
+  provider: string;
+  twilioAccountSid: string;
+  twilioAuthTokenMasked: string;
+  twilioPhoneNumber: string;
+  configured: boolean;
+};
+
+export interface TelephonySettingsResponse {
+  success: boolean;
+  data: TelephonySettingsResponseData;
+}
+
+export interface PatchTelephonySettingsRequest {
+  twilioAccountSid?: string;
+  twilioAuthToken?: string;
+  twilioPhoneNumber?: string;
+}
+
+export interface TestTelephonyRequest {
+  twilioAccountSid?: string;
+  twilioAuthToken?: string;
+}
+
 export type GetLeadsParams = {
   status?: LeadStatus;
   search?: string;
@@ -284,44 +353,3 @@ export type GetCallsParams = {
   limit?: number;
   offset?: number;
 };
-
-export type GetLlmSettings200 = { [key: string]: unknown };
-
-export type PatchLlmSettingsBodyCredentials = {
-  [key: string]: {
-    apiKey?: string;
-    model?: string;
-  };
-};
-
-export type PatchLlmSettingsBody = {
-  activeProviderId?: string;
-  credentials?: PatchLlmSettingsBodyCredentials;
-};
-
-export type PatchLlmSettings200 = { [key: string]: unknown };
-
-export type TestLlmProviderBody = {
-  providerId: string;
-  apiKey?: string;
-  model?: string;
-};
-
-export type TestLlmProvider200 = { [key: string]: unknown };
-
-export type GetTelephonySettings200 = { [key: string]: unknown };
-
-export type PatchTelephonySettingsBody = {
-  twilioAccountSid?: string;
-  twilioAuthToken?: string;
-  twilioPhoneNumber?: string;
-};
-
-export type PatchTelephonySettings200 = { [key: string]: unknown };
-
-export type TestTelephonyProviderBody = {
-  twilioAccountSid?: string;
-  twilioAuthToken?: string;
-};
-
-export type TestTelephonyProvider200 = { [key: string]: unknown };

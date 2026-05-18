@@ -27,28 +27,25 @@ import type {
   ErrorResponse,
   GetCallsParams,
   GetLeadsParams,
-  GetLlmSettings200,
-  GetTelephonySettings200,
   HealthStatus,
   InitiateCallResponse,
   LeadResponse,
   LeadsListResponse,
+  LlmSettingsResponse,
   LoginRequest,
   LoginResponse,
-  PatchLlmSettings200,
-  PatchLlmSettingsBody,
-  PatchTelephonySettings200,
-  PatchTelephonySettingsBody,
+  PatchLlmSettingsRequest,
+  PatchTelephonySettingsRequest,
   QueueResponse,
   RegisterRequest,
   RegisterResponse,
   RetryLeadResponse,
   SingleCallResponse,
   SingleLeadResponse,
-  TestLlmProvider200,
-  TestLlmProviderBody,
-  TestTelephonyProvider200,
-  TestTelephonyProviderBody,
+  TelephonySettingsResponse,
+  TestLlmProviderRequest,
+  TestProviderResponse,
+  TestTelephonyRequest,
   UpdateCallOutcomeRequest,
   UpdateLeadRequest,
 } from "./api.schemas";
@@ -1664,8 +1661,8 @@ export const getGetLlmSettingsUrl = () => {
 
 export const getLlmSettings = async (
   options?: RequestInit,
-): Promise<GetLlmSettings200> => {
-  return customFetch<GetLlmSettings200>(getGetLlmSettingsUrl(), {
+): Promise<LlmSettingsResponse> => {
+  return customFetch<LlmSettingsResponse>(getGetLlmSettingsUrl(), {
     ...options,
     method: "GET",
   });
@@ -1738,14 +1735,14 @@ export const getPatchLlmSettingsUrl = () => {
 };
 
 export const patchLlmSettings = async (
-  patchLlmSettingsBody: PatchLlmSettingsBody,
+  patchLlmSettingsRequest: PatchLlmSettingsRequest,
   options?: RequestInit,
-): Promise<PatchLlmSettings200> => {
-  return customFetch<PatchLlmSettings200>(getPatchLlmSettingsUrl(), {
+): Promise<LlmSettingsResponse> => {
+  return customFetch<LlmSettingsResponse>(getPatchLlmSettingsUrl(), {
     ...options,
     method: "PATCH",
     headers: { "Content-Type": "application/json", ...options?.headers },
-    body: JSON.stringify(patchLlmSettingsBody),
+    body: JSON.stringify(patchLlmSettingsRequest),
   });
 };
 
@@ -1756,14 +1753,14 @@ export const getPatchLlmSettingsMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof patchLlmSettings>>,
     TError,
-    { data: BodyType<PatchLlmSettingsBody> },
+    { data: BodyType<PatchLlmSettingsRequest> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof patchLlmSettings>>,
   TError,
-  { data: BodyType<PatchLlmSettingsBody> },
+  { data: BodyType<PatchLlmSettingsRequest> },
   TContext
 > => {
   const mutationKey = ["patchLlmSettings"];
@@ -1777,7 +1774,7 @@ export const getPatchLlmSettingsMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof patchLlmSettings>>,
-    { data: BodyType<PatchLlmSettingsBody> }
+    { data: BodyType<PatchLlmSettingsRequest> }
   > = (props) => {
     const { data } = props ?? {};
 
@@ -1790,7 +1787,7 @@ export const getPatchLlmSettingsMutationOptions = <
 export type PatchLlmSettingsMutationResult = NonNullable<
   Awaited<ReturnType<typeof patchLlmSettings>>
 >;
-export type PatchLlmSettingsMutationBody = BodyType<PatchLlmSettingsBody>;
+export type PatchLlmSettingsMutationBody = BodyType<PatchLlmSettingsRequest>;
 export type PatchLlmSettingsMutationError = ErrorType<unknown>;
 
 /**
@@ -1803,14 +1800,14 @@ export const usePatchLlmSettings = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof patchLlmSettings>>,
     TError,
-    { data: BodyType<PatchLlmSettingsBody> },
+    { data: BodyType<PatchLlmSettingsRequest> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof patchLlmSettings>>,
   TError,
-  { data: BodyType<PatchLlmSettingsBody> },
+  { data: BodyType<PatchLlmSettingsRequest> },
   TContext
 > => {
   return useMutation(getPatchLlmSettingsMutationOptions(options));
@@ -1824,14 +1821,14 @@ export const getTestLlmProviderUrl = () => {
 };
 
 export const testLlmProvider = async (
-  testLlmProviderBody: TestLlmProviderBody,
+  testLlmProviderRequest: TestLlmProviderRequest,
   options?: RequestInit,
-): Promise<TestLlmProvider200> => {
-  return customFetch<TestLlmProvider200>(getTestLlmProviderUrl(), {
+): Promise<TestProviderResponse> => {
+  return customFetch<TestProviderResponse>(getTestLlmProviderUrl(), {
     ...options,
     method: "POST",
     headers: { "Content-Type": "application/json", ...options?.headers },
-    body: JSON.stringify(testLlmProviderBody),
+    body: JSON.stringify(testLlmProviderRequest),
   });
 };
 
@@ -1842,14 +1839,14 @@ export const getTestLlmProviderMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof testLlmProvider>>,
     TError,
-    { data: BodyType<TestLlmProviderBody> },
+    { data: BodyType<TestLlmProviderRequest> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof testLlmProvider>>,
   TError,
-  { data: BodyType<TestLlmProviderBody> },
+  { data: BodyType<TestLlmProviderRequest> },
   TContext
 > => {
   const mutationKey = ["testLlmProvider"];
@@ -1863,7 +1860,7 @@ export const getTestLlmProviderMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof testLlmProvider>>,
-    { data: BodyType<TestLlmProviderBody> }
+    { data: BodyType<TestLlmProviderRequest> }
   > = (props) => {
     const { data } = props ?? {};
 
@@ -1876,7 +1873,7 @@ export const getTestLlmProviderMutationOptions = <
 export type TestLlmProviderMutationResult = NonNullable<
   Awaited<ReturnType<typeof testLlmProvider>>
 >;
-export type TestLlmProviderMutationBody = BodyType<TestLlmProviderBody>;
+export type TestLlmProviderMutationBody = BodyType<TestLlmProviderRequest>;
 export type TestLlmProviderMutationError = ErrorType<unknown>;
 
 /**
@@ -1889,14 +1886,14 @@ export const useTestLlmProvider = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof testLlmProvider>>,
     TError,
-    { data: BodyType<TestLlmProviderBody> },
+    { data: BodyType<TestLlmProviderRequest> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof testLlmProvider>>,
   TError,
-  { data: BodyType<TestLlmProviderBody> },
+  { data: BodyType<TestLlmProviderRequest> },
   TContext
 > => {
   return useMutation(getTestLlmProviderMutationOptions(options));
@@ -1911,8 +1908,8 @@ export const getGetTelephonySettingsUrl = () => {
 
 export const getTelephonySettings = async (
   options?: RequestInit,
-): Promise<GetTelephonySettings200> => {
-  return customFetch<GetTelephonySettings200>(getGetTelephonySettingsUrl(), {
+): Promise<TelephonySettingsResponse> => {
+  return customFetch<TelephonySettingsResponse>(getGetTelephonySettingsUrl(), {
     ...options,
     method: "GET",
   });
@@ -1985,16 +1982,16 @@ export const getPatchTelephonySettingsUrl = () => {
 };
 
 export const patchTelephonySettings = async (
-  patchTelephonySettingsBody: PatchTelephonySettingsBody,
+  patchTelephonySettingsRequest: PatchTelephonySettingsRequest,
   options?: RequestInit,
-): Promise<PatchTelephonySettings200> => {
-  return customFetch<PatchTelephonySettings200>(
+): Promise<TelephonySettingsResponse> => {
+  return customFetch<TelephonySettingsResponse>(
     getPatchTelephonySettingsUrl(),
     {
       ...options,
       method: "PATCH",
       headers: { "Content-Type": "application/json", ...options?.headers },
-      body: JSON.stringify(patchTelephonySettingsBody),
+      body: JSON.stringify(patchTelephonySettingsRequest),
     },
   );
 };
@@ -2006,14 +2003,14 @@ export const getPatchTelephonySettingsMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof patchTelephonySettings>>,
     TError,
-    { data: BodyType<PatchTelephonySettingsBody> },
+    { data: BodyType<PatchTelephonySettingsRequest> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof patchTelephonySettings>>,
   TError,
-  { data: BodyType<PatchTelephonySettingsBody> },
+  { data: BodyType<PatchTelephonySettingsRequest> },
   TContext
 > => {
   const mutationKey = ["patchTelephonySettings"];
@@ -2027,7 +2024,7 @@ export const getPatchTelephonySettingsMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof patchTelephonySettings>>,
-    { data: BodyType<PatchTelephonySettingsBody> }
+    { data: BodyType<PatchTelephonySettingsRequest> }
   > = (props) => {
     const { data } = props ?? {};
 
@@ -2041,7 +2038,7 @@ export type PatchTelephonySettingsMutationResult = NonNullable<
   Awaited<ReturnType<typeof patchTelephonySettings>>
 >;
 export type PatchTelephonySettingsMutationBody =
-  BodyType<PatchTelephonySettingsBody>;
+  BodyType<PatchTelephonySettingsRequest>;
 export type PatchTelephonySettingsMutationError = ErrorType<unknown>;
 
 /**
@@ -2054,14 +2051,14 @@ export const usePatchTelephonySettings = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof patchTelephonySettings>>,
     TError,
-    { data: BodyType<PatchTelephonySettingsBody> },
+    { data: BodyType<PatchTelephonySettingsRequest> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof patchTelephonySettings>>,
   TError,
-  { data: BodyType<PatchTelephonySettingsBody> },
+  { data: BodyType<PatchTelephonySettingsRequest> },
   TContext
 > => {
   return useMutation(getPatchTelephonySettingsMutationOptions(options));
@@ -2075,14 +2072,14 @@ export const getTestTelephonyProviderUrl = () => {
 };
 
 export const testTelephonyProvider = async (
-  testTelephonyProviderBody: TestTelephonyProviderBody,
+  testTelephonyRequest: TestTelephonyRequest,
   options?: RequestInit,
-): Promise<TestTelephonyProvider200> => {
-  return customFetch<TestTelephonyProvider200>(getTestTelephonyProviderUrl(), {
+): Promise<TestProviderResponse> => {
+  return customFetch<TestProviderResponse>(getTestTelephonyProviderUrl(), {
     ...options,
     method: "POST",
     headers: { "Content-Type": "application/json", ...options?.headers },
-    body: JSON.stringify(testTelephonyProviderBody),
+    body: JSON.stringify(testTelephonyRequest),
   });
 };
 
@@ -2093,14 +2090,14 @@ export const getTestTelephonyProviderMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof testTelephonyProvider>>,
     TError,
-    { data: BodyType<TestTelephonyProviderBody> },
+    { data: BodyType<TestTelephonyRequest> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof testTelephonyProvider>>,
   TError,
-  { data: BodyType<TestTelephonyProviderBody> },
+  { data: BodyType<TestTelephonyRequest> },
   TContext
 > => {
   const mutationKey = ["testTelephonyProvider"];
@@ -2114,7 +2111,7 @@ export const getTestTelephonyProviderMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof testTelephonyProvider>>,
-    { data: BodyType<TestTelephonyProviderBody> }
+    { data: BodyType<TestTelephonyRequest> }
   > = (props) => {
     const { data } = props ?? {};
 
@@ -2127,8 +2124,7 @@ export const getTestTelephonyProviderMutationOptions = <
 export type TestTelephonyProviderMutationResult = NonNullable<
   Awaited<ReturnType<typeof testTelephonyProvider>>
 >;
-export type TestTelephonyProviderMutationBody =
-  BodyType<TestTelephonyProviderBody>;
+export type TestTelephonyProviderMutationBody = BodyType<TestTelephonyRequest>;
 export type TestTelephonyProviderMutationError = ErrorType<unknown>;
 
 /**
@@ -2141,14 +2137,14 @@ export const useTestTelephonyProvider = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof testTelephonyProvider>>,
     TError,
-    { data: BodyType<TestTelephonyProviderBody> },
+    { data: BodyType<TestTelephonyRequest> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof testTelephonyProvider>>,
   TError,
-  { data: BodyType<TestTelephonyProviderBody> },
+  { data: BodyType<TestTelephonyRequest> },
   TContext
 > => {
   return useMutation(getTestTelephonyProviderMutationOptions(options));

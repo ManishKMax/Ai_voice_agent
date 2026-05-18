@@ -6,8 +6,8 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type PatchTelephonySettingsBody = {
-  twilioAccountSid?: string;
-  twilioAuthToken?: string;
-  twilioPhoneNumber?: string;
-};
+export interface TestLlmProviderRequest {
+  providerId: string;
+  apiKey?: string;
+  model?: string;
+}

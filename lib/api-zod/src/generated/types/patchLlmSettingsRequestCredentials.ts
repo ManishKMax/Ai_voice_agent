@@ -6,4 +6,9 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type PatchLlmSettings200 = { [key: string]: unknown };
+export type PatchLlmSettingsRequestCredentials = {
+  [key: string]: {
+    apiKey?: string;
+    model?: string;
+  };
+};

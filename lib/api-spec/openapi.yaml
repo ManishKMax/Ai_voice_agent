@@ -522,7 +522,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/LlmSettingsResponse"
     patch:
       operationId: patchLlmSettings
       tags: [settings]
@@ -533,24 +533,14 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                activeProviderId:
-                  type: string
-                credentials:
-                  type: object
-                  additionalProperties:
-                    type: object
-                    properties:
-                      apiKey: { type: string }
-                      model: { type: string }
+              $ref: "#/components/schemas/PatchLlmSettingsRequest"
       responses:
         "200":
           description: Updated LLM settings view
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/LlmSettingsResponse"
 
   /settings/llm/test:
     post:
@@ -563,19 +553,14 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [providerId]
-              properties:
-                providerId: { type: string }
-                apiKey: { type: string }
-                model: { type: string }
+              $ref: "#/components/schemas/TestLlmProviderRequest"
       responses:
         "200":
           description: Test result
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/TestProviderResponse"
 
   # ── Settings: Telephony (Task #28) ─────────────────────────────────────
   /settings/telephony:
@@ -590,7 +575,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/TelephonySettingsResponse"
     patch:
       operationId: patchTelephonySettings
       tags: [settings]
@@ -601,18 +586,14 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                twilioAccountSid: { type: string }
-                twilioAuthToken: { type: string }
-                twilioPhoneNumber: { type: string }
+              $ref: "#/components/schemas/PatchTelephonySettingsRequest"
       responses:
         "200":
           description: Updated telephony settings view
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/TelephonySettingsResponse"
 
   /settings/telephony/test:
     post:
@@ -625,17 +606,14 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                twilioAccountSid: { type: string }
-                twilioAuthToken: { type: string }
+              $ref: "#/components/schemas/TestTelephonyRequest"
       responses:
         "200":
           description: Test result
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/TestProviderResponse"
 
 components:
   securitySchemes:
@@ -1076,3 +1054,86 @@ components:
         callId:
           type: integer
       required: [message, callId]
+
+    LlmProviderRow:
+      type: object
+      properties:
+        id: { type: string }
+        label: { type: string }
+        model: { type: string }
+        defaultModel: { type: string }
+        apiKeyMasked: { type: string }
+        configured: { type: boolean }
+      required: [id, label, model, defaultModel, apiKeyMasked, configured]
+
+    LlmSettingsResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: object
+          properties:
+            activeProviderId: { type: string }
+            providers:
+              type: array
+              items: { $ref: "#/components/schemas/LlmProviderRow" }
+          required: [activeProviderId, providers]
+      required: [success, data]
+
+    PatchLlmSettingsRequest:
+      type: object
+      properties:
+        activeProviderId: { type: string }
+        credentials:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              apiKey: { type: string }
+              model: { type: string }
+
+    TestLlmProviderRequest:
+      type: object
+      required: [providerId]
+      properties:
+        providerId: { type: string }
+        apiKey: { type: string }
+        model: { type: string }
+
+    TestProviderResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        message: { type: string }
+        data:
+          type: object
+          additionalProperties: true
+      required: [success]
+
+    TelephonySettingsResponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: object
+          properties:
+            provider: { type: string }
+            twilioAccountSid: { type: string }
+            twilioAuthTokenMasked: { type: string }
+            twilioPhoneNumber: { type: string }
+            configured: { type: boolean }
+          required: [provider, twilioAccountSid, twilioAuthTokenMasked, twilioPhoneNumber, configured]
+      required: [success, data]
+
+    PatchTelephonySettingsRequest:
+      type: object
+      properties:
+        twilioAccountSid: { type: string }
+        twilioAuthToken: { type: string }
+        twilioPhoneNumber: { type: string }
+
+    TestTelephonyRequest:
+      type: object
+      properties:
+        twilioAccountSid: { type: string }
+        twilioAuthToken: { type: string }

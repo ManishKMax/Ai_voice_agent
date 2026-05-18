@@ -577,7 +577,22 @@ export const AnalyzeCallResponse = zod.object({
 /**
  * @summary Get LLM providers (with masked API keys) and active provider id
  */
-export const GetLlmSettingsResponse = zod.object({}).passthrough();
+export const GetLlmSettingsResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    activeProviderId: zod.string(),
+    providers: zod.array(
+      zod.object({
+        id: zod.string(),
+        label: zod.string(),
+        model: zod.string(),
+        defaultModel: zod.string(),
+        apiKeyMasked: zod.string(),
+        configured: zod.boolean(),
+      }),
+    ),
+  }),
+});
 
 /**
  * @summary Save active LLM provider + per-provider credentials
@@ -595,7 +610,22 @@ export const PatchLlmSettingsBody = zod.object({
     .optional(),
 });
 
-export const PatchLlmSettingsResponse = zod.object({}).passthrough();
+export const PatchLlmSettingsResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    activeProviderId: zod.string(),
+    providers: zod.array(
+      zod.object({
+        id: zod.string(),
+        label: zod.string(),
+        model: zod.string(),
+        defaultModel: zod.string(),
+        apiKeyMasked: zod.string(),
+        configured: zod.boolean(),
+      }),
+    ),
+  }),
+});
 
 /**
  * @summary Smoke-test an LLM provider (1-token hello-world chat)
@@ -606,12 +636,25 @@ export const TestLlmProviderBody = zod.object({
   model: zod.string().optional(),
 });
 
-export const TestLlmProviderResponse = zod.object({}).passthrough();
+export const TestLlmProviderResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+  data: zod.record(zod.string(), zod.unknown()).optional(),
+});
 
 /**
  * @summary Get telephony (Twilio) credentials with masked tokens
  */
-export const GetTelephonySettingsResponse = zod.object({}).passthrough();
+export const GetTelephonySettingsResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    provider: zod.string(),
+    twilioAccountSid: zod.string(),
+    twilioAuthTokenMasked: zod.string(),
+    twilioPhoneNumber: zod.string(),
+    configured: zod.boolean(),
+  }),
+});
 
 /**
  * @summary Update Twilio credentials. Empty fields preserve the stored value.
@@ -622,7 +665,16 @@ export const PatchTelephonySettingsBody = zod.object({
   twilioPhoneNumber: zod.string().optional(),
 });
 
-export const PatchTelephonySettingsResponse = zod.object({}).passthrough();
+export const PatchTelephonySettingsResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.object({
+    provider: zod.string(),
+    twilioAccountSid: zod.string(),
+    twilioAuthTokenMasked: zod.string(),
+    twilioPhoneNumber: zod.string(),
+    configured: zod.boolean(),
+  }),
+});
 
 /**
  * @summary Live-validate Twilio credentials (alias of /settings/test-twilio)
@@ -632,4 +684,8 @@ export const TestTelephonyProviderBody = zod.object({
   twilioAuthToken: zod.string().optional(),
 });
 
-export const TestTelephonyProviderResponse = zod.object({}).passthrough();
+export const TestTelephonyProviderResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+  data: zod.record(zod.string(), zod.unknown()).optional(),
+});

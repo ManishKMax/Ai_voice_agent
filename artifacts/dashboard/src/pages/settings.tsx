@@ -341,9 +341,19 @@ export default function Settings() {
         retryDelay3: form.retryDelay3,
         webhookUrl: form.webhookUrl,
       };
-      if (form.twilioAccountSid) payload.twilioAccountSid = form.twilioAccountSid;
-      if (form.twilioAuthToken)  payload.twilioAuthToken  = form.twilioAuthToken;
-      if (form.twilioPhoneNumber) payload.twilioPhoneNumber = form.twilioPhoneNumber;
+      // Task #28: Twilio credentials live on the dedicated telephony endpoint
+      // so they round-trip the same surface that GET /settings/telephony reads.
+      // Phone number is sent even when empty so the user can clear it.
+      if (form.twilioAccountSid || form.twilioAuthToken || form.twilioPhoneNumber !== undefined) {
+        const telephonyPayload: Record<string, string> = {};
+        if (form.twilioAccountSid) telephonyPayload.twilioAccountSid = form.twilioAccountSid;
+        if (form.twilioAuthToken)  telephonyPayload.twilioAuthToken  = form.twilioAuthToken;
+        if (typeof form.twilioPhoneNumber === "string") telephonyPayload.twilioPhoneNumber = form.twilioPhoneNumber;
+        await apiFetch("/api/settings/telephony", {
+          method: "PATCH",
+          body: JSON.stringify(telephonyPayload),
+        });
+      }
       if (form.sarvamApiKey)     payload.sarvamApiKey     = form.sarvamApiKey;
       if (form.webhookSecret)    payload.webhookSecret    = form.webhookSecret;
 

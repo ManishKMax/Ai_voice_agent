@@ -5,8 +5,9 @@
  * AI Lead Calling & Qualification System API
  * OpenAPI spec version: 0.1.0
  */
+import type { LlmProviderRow } from "./llmProviderRow";
 
-export type TestTelephonyProviderBody = {
-  twilioAccountSid?: string;
-  twilioAuthToken?: string;
+export type LlmSettingsResponseData = {
+  activeProviderId: string;
+  providers: LlmProviderRow[];
 };

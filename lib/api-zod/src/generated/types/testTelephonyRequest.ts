@@ -6,4 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type TestLlmProvider200 = { [key: string]: unknown };
+export interface TestTelephonyRequest {
+  twilioAccountSid?: string;
+  twilioAuthToken?: string;
+}

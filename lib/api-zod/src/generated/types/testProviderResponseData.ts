@@ -6,4 +6,4 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type GetTelephonySettings200 = { [key: string]: unknown };
+export type TestProviderResponseData = { [key: string]: unknown };

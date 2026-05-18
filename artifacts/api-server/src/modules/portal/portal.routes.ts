@@ -232,13 +232,14 @@ router.patch("/credentials", requireClerkAuth, async (req: any, res, next): Prom
   try {
     const tenant = await getOrCreateTenant(req.clerkUserId, "User", "");
     const body = req.body as {
-      telephonyProvider?: "twilio" | "exotel";
+      telephonyProvider?: "twilio" | "exotel" | "livekit";
       twilio?: { accountSid?: string; authToken?: string; phoneNumber?: string };
       exotel?: { accountSid?: string; apiKey?: string; apiToken?: string; phoneNumber?: string };
+      livekit?: { sipTrunkId?: string; outboundNumber?: string };
     };
 
-    if (body.telephonyProvider && !["twilio", "exotel"].includes(body.telephonyProvider)) {
-      res.status(400).json({ error: "telephonyProvider must be 'twilio' or 'exotel'" });
+    if (body.telephonyProvider && !["twilio", "exotel", "livekit"].includes(body.telephonyProvider)) {
+      res.status(400).json({ error: "telephonyProvider must be 'twilio', 'exotel', or 'livekit'" });
       return;
     }
 
@@ -251,6 +252,8 @@ router.patch("/credentials", requireClerkAuth, async (req: any, res, next): Prom
       exotelApiKey: body.exotel?.apiKey,
       exotelApiToken: body.exotel?.apiToken,
       exotelPhoneNumber: body.exotel?.phoneNumber,
+      livekitSipTrunkId: body.livekit?.sipTrunkId,
+      livekitSipOutboundNumber: body.livekit?.outboundNumber,
     });
 
     res.json({ success: true, telephonyProvider: updated.telephonyProvider });

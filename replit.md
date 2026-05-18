@@ -281,6 +281,90 @@ What's intentionally NOT in Phase 1:
   calls can route through LiveKit instead of Twilio Media Streams.
 - No tenant-scoped credentials (single platform-wide LiveKit project).
 
+### LiveKit transport (Phase 2 — outbound PSTN via SIP trunk)
+
+Task #32 routes outbound lead calls through a LiveKit SIP trunk instead
+of Twilio Programmable Voice. Twilio remains as a fallback adapter
+(per-tenant `telephony_provider="twilio"`) but new tenants default to
+`"livekit"` and the Twilio Settings card is now badged **Legacy**.
+
+Dispatch flow:
+```
+triggerCallForLead(leadId)
+  ↓
+dispatchCall(toPhone, leadId, tenantId)
+  ↓  tenant.telephony_provider (defaults to "livekit" when unset)
+  ↓
+LiveKitProvider.initiateCall()
+  ├─ pick room name      lead-<id>-<rand>
+  ├─ pick participant id sip-lead-<id>-<rand>
+  ├─ startLiveKitAgent({roomName, leadId, source:"production"})
+  │   ↳ agent worker joins room hidden, runs CallSession on inbound
+  │     PCM frames, publishes outbound PCM via AudioSource.
+  └─ dialSipParticipant({roomName, toPhone, sipTrunkId, fromNumber,
+                          participantIdentity, metadata:{leadId,tenantId}})
+       ↳ SipClient.createSipParticipant — LiveKit Cloud rings the lead
+         through the configured SIP trunk and joins them into the room.
+  ↓
+returns participantIdentity (string) → written to calls.twilio_call_sid
+  (column name is legacy; identifier carries provider-specific value)
+  ↓
+LiveKit Cloud webhook → POST /api/livekit/webhook
+  ├─ participant_joined  (identity starts sip-lead-*) → handleCallStatusUpdate("answered")
+  ├─ participant_left                                  → handleCallStatusUpdate("completed")
+  └─ participant_connection_aborted                    → handleCallStatusUpdate("completed")
+```
+
+Env vars (platform-wide defaults):
+- `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_URL` — existing Phase-1 vars.
+- `LIVEKIT_SIP_TRUNK_ID` — outbound SIP trunk SID from LiveKit Cloud → Settings → SIP.
+- `LIVEKIT_SIP_OUTBOUND_NUMBER` — optional E.164 "From" number override. Trunk default is used if unset.
+- `LIVEKIT_WEBHOOK_API_KEY` / `LIVEKIT_WEBHOOK_API_SECRET` — optional. Defaults to `LIVEKIT_API_KEY/SECRET` (what LiveKit Cloud signs with by default).
+
+Per-tenant overrides (columns on `tenants`):
+- `livekit_sip_trunk_id` — overrides env default for this tenant.
+- `livekit_sip_outbound_number` — overrides env default "From" number.
+
+Operational runbook — first-time SIP trunk setup:
+1. Provision a SIP trunk with your PSTN carrier (Twilio Elastic SIP / Telnyx /
+   Bandwidth / Indian carriers like Knowlarity all work). You need: SIP
+   termination URI, auth username/password if required, and your DID(s).
+2. In LiveKit Cloud → Settings → SIP → "Outbound trunks", create a trunk
+   pointing at that carrier. Copy the trunk SID (format `ST_…`).
+3. Set `LIVEKIT_SIP_TRUNK_ID=ST_…` and `LIVEKIT_SIP_OUTBOUND_NUMBER=<+E.164>`
+   on the API-server deployment.
+4. LiveKit Cloud → Settings → Webhooks → add `https://<your-host>/api/livekit/webhook`.
+   No extra signing key needed unless you rotate.
+5. Restart `artifacts/api-server: API Server`. Boot log will print
+   `livekit_probe: OK` if creds + project URL line up. SIP creds are NOT
+   exercised by the probe — first real dispatch reveals trunk-level issues.
+6. Smoke test: create a lead on a tenant with no `telephony_provider`
+   override (so dispatch picks "livekit"), click Call Now. Watch
+   `livekit_outbound_dispatch` → `livekit_sip_participant_created` →
+   `livekit_webhook_event participant_joined` in the api-server logs.
+7. Failure modes:
+   - `LiveKit SIP trunk not configured` — neither env nor per-tenant set.
+   - LiveKit `503/twirp_error` from `createSipParticipant` — trunk doesn't
+     own the destination number, carrier rejected the INVITE, or
+     `fromNumber` isn't an assigned DID on the trunk.
+   - Lead row stays "calling" with no answered event — webhook URL not
+     configured in LiveKit Cloud, or `participant_joined` payload's
+     `identity` doesn't start with `sip-lead-` (means the room was started
+     via the simulator path, not outbound dispatch).
+8. Twilio fallback for a single tenant:
+   `UPDATE tenants SET telephony_provider='twilio' WHERE id=$1;` — that
+   tenant's next call goes through the Twilio adapter (existing code path,
+   unchanged).
+
+What's intentionally NOT in Phase 2:
+- No automated SIP trunk provisioning — operational, user-driven.
+- No `livekit_transport_ms` metric persisted yet (TODO once we can read
+  WebRTC RTC stats off the room from agent-worker). The end-to-end
+  per-turn latency in `call_metrics` already covers user-visible latency.
+- No Settings UI form for the per-tenant LiveKit SIP fields — set via
+  `PATCH /api/portal/credentials` `{telephonyProvider:"livekit",livekit:{sipTrunkId,outboundNumber}}`
+  for now, full UI in a follow-up.
+
 ### Voice acceptance test
 
 `pnpm --filter @workspace/scripts run voice-acceptance-test` replays a

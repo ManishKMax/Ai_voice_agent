@@ -571,8 +571,18 @@ export default function Settings() {
               <PhoneCall className="h-4 w-4 text-red-600" />
             </div>
             <div>
-              <h2 className="font-semibold text-foreground">Twilio</h2>
-              <p className="text-xs text-muted-foreground">Voice calls & SMS</p>
+              <div className="flex items-center gap-2">
+                <h2 className="font-semibold text-foreground">Twilio</h2>
+                <span
+                  className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border border-amber-200 dark:border-amber-900"
+                  title="Twilio Programmable Voice is now the fallback transport. New tenants default to LiveKit SIP for outbound PSTN."
+                >
+                  Legacy
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Fallback transport — new tenants default to LiveKit SIP. Keep credentials configured for existing Twilio-routed tenants and as a failover.
+              </p>
             </div>
           </div>
           <StatusBadge status={twilioStatus} connected={currentStatus.twilioConnected} />

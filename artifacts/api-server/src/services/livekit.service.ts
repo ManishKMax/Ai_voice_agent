@@ -1,4 +1,4 @@
-import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
+import { AccessToken, RoomServiceClient, SipClient } from "livekit-server-sdk";
 import { logger } from "../lib/logger.js";
 
 /**
@@ -24,6 +24,36 @@ export function getLiveKitCreds(): LiveKitCreds | null {
   const url = process.env["LIVEKIT_URL"];
   if (!apiKey || !apiSecret || !url) return null;
   return { apiKey, apiSecret, url };
+}
+
+/**
+ * Phase-2 SIP defaults. Operators provision the SIP trunk + outbound DID in
+ * the LiveKit Cloud dashboard (or via `lk sip outbound`) and surface the
+ * resulting IDs via env vars. Per-tenant overrides on `tenants` table take
+ * precedence when set.
+ *
+ * `LIVEKIT_WEBHOOK_API_KEY` is optional — if unset, the webhook handler
+ * falls back to the main `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` pair, which
+ * is what LiveKit Cloud signs webhooks with by default.
+ */
+export interface LiveKitSipDefaults {
+  trunkId: string | null;
+  outboundNumber: string | null;
+}
+
+export function getLiveKitSipDefaults(): LiveKitSipDefaults {
+  return {
+    trunkId: process.env["LIVEKIT_SIP_TRUNK_ID"] ?? null,
+    outboundNumber: process.env["LIVEKIT_SIP_OUTBOUND_NUMBER"] ?? null,
+  };
+}
+
+/** Webhook signing key pair — defaults to the main API creds. */
+export function getLiveKitWebhookCreds(): { apiKey: string; apiSecret: string } | null {
+  const apiKey = process.env["LIVEKIT_WEBHOOK_API_KEY"] ?? process.env["LIVEKIT_API_KEY"];
+  const apiSecret = process.env["LIVEKIT_WEBHOOK_API_SECRET"] ?? process.env["LIVEKIT_API_SECRET"];
+  if (!apiKey || !apiSecret) return null;
+  return { apiKey, apiSecret };
 }
 
 export interface MintTokenOptions {
@@ -72,6 +102,96 @@ export async function mintLiveKitToken(opts: MintTokenOptions): Promise<string> 
     hidden: opts.isAgent ?? false,
   });
   return at.toJwt();
+}
+
+// ── SIP outbound dispatch (Phase 2) ─────────────────────────────────────────
+//
+// `createSipParticipant` is the LiveKit Cloud API that places an outbound
+// PSTN call through a provisioned SIP trunk and joins the answering party
+// into a room as a participant. The agent worker is already in the room (or
+// joins concurrently), so once the SIP participant connects, audio flows
+// peer-to-peer through the SFU. No TwiML, no carrier webhook for connect.
+//
+// We pin `waitUntilAnswered: false` so the call returns immediately with a
+// participant identity — status transitions (ringing → answered → ended)
+// arrive over the LiveKit webhook, which maps onto our existing
+// /api/call-status flow.
+
+export interface DialSipParticipantOptions {
+  /** Pre-existing room name. Created on first participant join if absent. */
+  roomName: string;
+  /** E.164 destination phone number. */
+  toPhone: string;
+  /** SIP trunk to dial out from. Tenant-scoped, falls back to env default. */
+  sipTrunkId: string;
+  /** Optional "From" number override. Falls back to trunk default. */
+  fromNumber?: string | null;
+  /** Stable identity for the SIP participant. Used to correlate webhooks. */
+  participantIdentity: string;
+  /** Display name shown to the agent participant. */
+  participantName?: string;
+  /** Free-form metadata blob — we stash leadId here. */
+  participantMetadata?: string;
+  /** Hard cap on call duration (seconds). Defaults to 30 min. */
+  maxCallDurationSeconds?: number;
+  /** Ringing timeout (seconds). Defaults to 30s before LiveKit gives up. */
+  ringingTimeoutSeconds?: number;
+}
+
+export interface DialSipParticipantResult {
+  participantIdentity: string;
+  /** LiveKit's own SIP call ID — useful for cross-referencing in their dashboard. */
+  sipCallId?: string;
+  roomName: string;
+}
+
+export async function dialSipParticipant(
+  opts: DialSipParticipantOptions,
+): Promise<DialSipParticipantResult> {
+  const creds = getLiveKitCreds();
+  if (!creds) {
+    throw new Error(
+      "LiveKit not configured (LIVEKIT_API_KEY / LIVEKIT_API_SECRET / LIVEKIT_URL).",
+    );
+  }
+  const httpUrl = toHttpUrl(creds.url);
+  const client = new SipClient(httpUrl, creds.apiKey, creds.apiSecret);
+  const sipOpts: Parameters<SipClient["createSipParticipant"]>[3] = {
+    participantIdentity: opts.participantIdentity,
+    participantName: opts.participantName ?? opts.participantIdentity,
+    participantMetadata: opts.participantMetadata,
+    ringingTimeout: opts.ringingTimeoutSeconds ?? 30,
+    maxCallDuration: opts.maxCallDurationSeconds ?? 30 * 60,
+    waitUntilAnswered: false,
+    playDialtone: false,
+  };
+  if (opts.fromNumber) sipOpts.fromNumber = opts.fromNumber;
+  const info = await client.createSipParticipant(
+    opts.sipTrunkId,
+    opts.toPhone,
+    opts.roomName,
+    sipOpts,
+  );
+  // SIPParticipantInfo fields vary across SDK versions; the identity is
+  // canonical and what webhook events echo back.
+  const identity =
+    (info as { participantIdentity?: string; participant_identity?: string }).participantIdentity
+    ?? (info as { participant_identity?: string }).participant_identity
+    ?? opts.participantIdentity;
+  const sipCallId =
+    (info as { sipCallId?: string; sip_call_id?: string }).sipCallId
+    ?? (info as { sip_call_id?: string }).sip_call_id;
+  logger.info(
+    {
+      roomName: opts.roomName,
+      participantIdentity: identity,
+      sipCallId: sipCallId ?? null,
+      trunkId: opts.sipTrunkId,
+      hasFromOverride: !!opts.fromNumber,
+    },
+    "livekit_sip_participant_created",
+  );
+  return { participantIdentity: identity, sipCallId, roomName: opts.roomName };
 }
 
 /**

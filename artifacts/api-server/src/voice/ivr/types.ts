@@ -116,4 +116,39 @@ export interface IvrProvider {
     leadId: number | undefined,
     extraParameters?: Record<string, string>,
   ): Promise<{ contentType: string; body: string }> | { contentType: string; body: string };
+
+  // ── Outbound dispatch (Phase 2) ──────────────────────────────────────────
+  //
+  // Optional. When present, `calls.service.dispatchCall()` will call this
+  // instead of the provider-specific service module (twilio.service /
+  // exotel.service) to place an outbound PSTN call.
+  //
+  // Required for LiveKit because the SIP path has no separate webhook —
+  // creating the room, dispatching the in-process agent, and adding the SIP
+  // participant happen in one shot. Twilio/Exotel keep using their existing
+  // service-module entry points and leave this undefined.
+  //
+  // Must return a stable identifier that subsequent status webhooks can use
+  // to locate the call row (Twilio CallSid, Exotel SID, or LiveKit SIP
+  // participant identity for LiveKit). The same identifier is written to
+  // `calls.twilio_call_sid` regardless of provider — the column name is
+  // legacy.
+  initiateCall?(
+    toPhone: string,
+    leadId: number,
+    tenant: TenantTelephonyContext | null,
+    options?: InitiateCallOptions,
+  ): Promise<string>;
+}
+
+/** Per-tenant overrides for outbound provider dispatch. */
+export interface TenantTelephonyContext {
+  tenantId: number;
+  /** LiveKit SIP-only fields (Phase 2). Empty = use platform env vars. */
+  livekitSipTrunkId?: string | null;
+  livekitSipOutboundNumber?: string | null;
+}
+
+export interface InitiateCallOptions {
+  llmProviderOverride?: string;
 }

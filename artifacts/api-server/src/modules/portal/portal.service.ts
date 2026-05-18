@@ -277,7 +277,7 @@ export async function getPortalUsageForMonth(tenantId: number, year: number, mon
 export async function updateTenantCredentials(
   tenantId: number,
   fields: {
-    telephonyProvider?: "twilio" | "exotel";
+    telephonyProvider?: "twilio" | "exotel" | "livekit";
     twilioAccountSid?: string;
     twilioAuthToken?: string;
     twilioPhoneNumber?: string;
@@ -285,6 +285,8 @@ export async function updateTenantCredentials(
     exotelApiKey?: string;
     exotelApiToken?: string;
     exotelPhoneNumber?: string;
+    livekitSipTrunkId?: string;
+    livekitSipOutboundNumber?: string;
   },
 ) {
   const updates: Record<string, unknown> = { updatedAt: new Date() };

@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { callsTable, leadsTable, tenantsTable, type CallStatus } from "@workspace/db/schema";
 import { initiateCall } from "../../services/twilio.service.js";
 import { initiateExotelCall } from "../../services/exotel.service.js";
+import { getIvrProvider } from "../../voice/ivr/index.js";
 import { updateLeadStatus } from "../leads/leads.service.js";
 import { enqueueLead, dequeueLeadJobs } from "../queue/queue.service.js";
 import { platformSettings } from "../../config/platform.config.js";
@@ -36,19 +37,23 @@ async function dispatchCall(
     return initiateCall(toPhone, leadId, undefined, { llmProviderOverride: options.llmProviderOverride });
   }
 
-  const provider = tenant.telephonyProvider ?? "twilio";
+  const provider = tenant.telephonyProvider ?? "livekit";
 
   if (provider === "livekit") {
-    // Phase 1 LiveKit is browser-mic only (Call Simulator). Outbound PSTN
-    // dispatch via LiveKit SIP trunk is Phase 2 work. Fail loudly here so
-    // an operator who flips `telephony_provider=livekit` early sees a clear
-    // error instead of receiving a Twilio webhook with a JSON body (which
-    // Twilio would reject as malformed TwiML and silently drop the call).
-    throw new Error(
-      "LiveKit outbound dispatch is not yet supported (Phase 2). " +
-      "Phase 1 only powers the in-browser Call Simulator. " +
-      "Set this tenant's telephony_provider to 'twilio' or 'exotel' for outbound PSTN calls.",
-    );
+    // Phase 2: outbound PSTN routes through LiveKit SIP trunk + in-process
+    // agent worker. Provider owns the entire flow (room create → agent
+    // spawn → SIP dial) and returns the SIP participant identity, which is
+    // stored on `calls.twilio_call_sid` (legacy column name) so webhook
+    // events can locate the row.
+    const livekitProvider = getIvrProvider("livekit");
+    if (!livekitProvider.initiateCall) {
+      throw new Error("LiveKit provider does not implement initiateCall (build issue).");
+    }
+    return livekitProvider.initiateCall(toPhone, leadId, {
+      tenantId: tenant.id,
+      livekitSipTrunkId: tenant.livekitSipTrunkId,
+      livekitSipOutboundNumber: tenant.livekitSipOutboundNumber,
+    }, { llmProviderOverride: options.llmProviderOverride });
   }
 
   if (provider === "exotel") {

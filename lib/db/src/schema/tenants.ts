@@ -25,6 +25,14 @@ export const tenantsTable = pgTable("tenants", {
   exotelApiKey: text("exotel_api_key"),
   exotelApiToken: text("exotel_api_token"),
   exotelPhoneNumber: text("exotel_phone_number"),
+  // LiveKit SIP outbound (Phase 2). When telephonyProvider="livekit",
+  // outbound PSTN calls are placed via LiveKit SIP trunks instead of Twilio.
+  // Trunk provisioning is done by ops in the LiveKit Cloud dashboard; this
+  // table only stores the resulting trunk ID + the "from" number to dial out
+  // from. Both fields are optional — if unset, the platform-wide
+  // LIVEKIT_SIP_TRUNK_ID / LIVEKIT_SIP_OUTBOUND_NUMBER env vars are used.
+  livekitSipTrunkId: text("livekit_sip_trunk_id"),
+  livekitSipOutboundNumber: text("livekit_sip_outbound_number"),
   minutesBalance: integer("minutes_balance").default(0).notNull(),
   sarvamEnabled: boolean("sarvam_enabled").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),

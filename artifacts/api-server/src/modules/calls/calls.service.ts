@@ -38,6 +38,19 @@ async function dispatchCall(
 
   const provider = tenant.telephonyProvider ?? "twilio";
 
+  if (provider === "livekit") {
+    // Phase 1 LiveKit is browser-mic only (Call Simulator). Outbound PSTN
+    // dispatch via LiveKit SIP trunk is Phase 2 work. Fail loudly here so
+    // an operator who flips `telephony_provider=livekit` early sees a clear
+    // error instead of receiving a Twilio webhook with a JSON body (which
+    // Twilio would reject as malformed TwiML and silently drop the call).
+    throw new Error(
+      "LiveKit outbound dispatch is not yet supported (Phase 2). " +
+      "Phase 1 only powers the in-browser Call Simulator. " +
+      "Set this tenant's telephony_provider to 'twilio' or 'exotel' for outbound PSTN calls.",
+    );
+  }
+
   if (provider === "exotel") {
     if (!tenant.exotelAccountSid || !tenant.exotelApiKey || !tenant.exotelApiToken || !tenant.exotelPhoneNumber) {
       throw new Error("Exotel credentials are not configured for this tenant");

@@ -162,8 +162,14 @@ export function splitForTTS(text: string, maxChars = 200): string[] {
  */
 export function splitFirstClauseThen(
   text: string,
-  firstMin = 10,
-  firstMax = 45,
+  // Tuned for audio-continuity, NOT raw time-to-first-audio. Chunk 1 needs
+  // to play LONGER than chunk 2's TTS round-trip (~1.5-2s on Sarvam HTTP)
+  // or you hear silence between phrases. At ~8 chars/sec Hindi speech rate,
+  // 25-70 chars = 3-9s of audio — comfortably masks the next synth round-
+  // trip. Earlier 10/45 setting saved ~400ms of TTFA but created audible
+  // gaps mid-sentence, which sounded like the voice was "breaking".
+  firstMin = 25,
+  firstMax = 70,
   restMax = 200,
 ): string[] {
   const t = text.trim();

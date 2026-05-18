@@ -370,12 +370,26 @@ What's intentionally NOT in Phase 2:
 - No Settings UI form for the per-tenant LiveKit SIP fields — set via
   `PATCH /api/portal/credentials` `{telephonyProvider:"livekit",livekit:{sipTrunkId,outboundNumber}}`
   for now, full UI in a follow-up.
-- No tenant trunk allowlist enforcement. Tenants can set arbitrary
-  `livekit_sip_trunk_id`, and LiveKit Cloud will accept any trunk the
-  account owns. For deployments with multiple tenants on the same
-  LiveKit account, isolation must be enforced operationally by giving
-  each tenant a separate LiveKit project (separate API key/secret pair)
-  — schema-level allowlist is a follow-up.
+- No admin UI to assign per-tenant trunks — set via DB
+  (`UPDATE tenants SET livekit_sip_trunk_id=... WHERE id=$1;`) and put
+  the trunk on the allowlist below. Self-service trunk editing via the
+  portal is intentionally blocked.
+
+Tenant-to-trunk isolation (enforced server-side):
+- `PATCH /api/portal/credentials` strips `livekit.sipTrunkId` from the
+  body and returns 403 if a tenant tries to set it directly. Tenants
+  may only choose their displayed `outboundNumber` (LiveKit will reject
+  the dial if the trunk doesn't own that DID).
+- At dispatch time, `LiveKitProvider.initiateCall` checks the tenant's
+  trunk ID against `getAllowedSipTrunks()` (= `LIVEKIT_SIP_TRUNK_ID` ∪
+  comma-separated `LIVEKIT_SIP_TRUNK_ALLOWLIST`). Any trunk not on the
+  allowlist throws `livekit_outbound_trunk_not_allowlisted` and the
+  lead is marked failed — even if a forged trunk somehow lands in the
+  tenants table via DB or a future bug.
+- Recommended operational pattern: one tenant per LiveKit project
+  (separate API key/secret pair → separate SIP trunk universe) for the
+  strongest isolation. The allowlist is the second line of defense for
+  shared-project deployments.
 
 Migration safety for pre-Phase-2 tenants:
 - Tenants created before Phase 2 have `telephony_provider = NULL`.

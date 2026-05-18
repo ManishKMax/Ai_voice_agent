@@ -48,6 +48,30 @@ export function getLiveKitSipDefaults(): LiveKitSipDefaults {
   };
 }
 
+/**
+ * Allowlist of SIP trunk IDs that a per-tenant `livekit_sip_trunk_id`
+ * value is permitted to take. Enforced at dispatch time so that even if
+ * a row in `tenants` somehow ends up with a forged trunk ID (direct DB
+ * access, future bug in admin route, etc.), we refuse to dial through
+ * any trunk not on this allowlist.
+ *
+ * The allowlist always implicitly includes the platform default
+ * (`LIVEKIT_SIP_TRUNK_ID`). Additional trunk IDs may be configured via
+ * `LIVEKIT_SIP_TRUNK_ALLOWLIST` (comma-separated).
+ */
+export function getAllowedSipTrunks(): Set<string> {
+  const set = new Set<string>();
+  const def = process.env["LIVEKIT_SIP_TRUNK_ID"];
+  if (def) set.add(def);
+  const extra = process.env["LIVEKIT_SIP_TRUNK_ALLOWLIST"];
+  if (extra) {
+    for (const id of extra.split(",").map((s) => s.trim()).filter(Boolean)) {
+      set.add(id);
+    }
+  }
+  return set;
+}
+
 /** Webhook signing key pair — defaults to the main API creds. */
 export function getLiveKitWebhookCreds(): { apiKey: string; apiSecret: string } | null {
   const apiKey = process.env["LIVEKIT_WEBHOOK_API_KEY"] ?? process.env["LIVEKIT_API_KEY"];

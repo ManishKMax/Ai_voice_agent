@@ -4,6 +4,7 @@ import {
   mintLiveKitToken,
   getLiveKitCreds,
   getLiveKitSipDefaults,
+  getAllowedSipTrunks,
   dialSipParticipant,
 } from "../../services/livekit.service.js";
 import { startLiveKitAgent } from "../livekit/agent-worker.js";
@@ -190,8 +191,32 @@ export class LiveKitProvider implements IvrProvider {
     if (!trunkId) {
       throw new Error(
         "LiveKit SIP trunk not configured. Set LIVEKIT_SIP_TRUNK_ID (platform) " +
-        "or tenants.livekit_sip_trunk_id (per-tenant).",
+        "or tenants.livekit_sip_trunk_id (per-tenant, admin-only).",
       );
+    }
+
+    // Hard tenant isolation: if the tenant row carries a non-default trunk
+    // ID, it MUST be on the platform allowlist. This prevents a compromised
+    // tenant row (or future bug in an admin write path) from routing dials
+    // through a trunk owned by another customer / privileged ops trunk.
+    // The platform default trunk is always allowed.
+    if (tenant?.livekitSipTrunkId && tenant.livekitSipTrunkId !== defaults.trunkId) {
+      const allowed = getAllowedSipTrunks();
+      if (!allowed.has(tenant.livekitSipTrunkId)) {
+        logger.error(
+          {
+            leadId,
+            tenantId: tenant?.tenantId ?? null,
+            requestedTrunk: tenant.livekitSipTrunkId,
+            allowedCount: allowed.size,
+          },
+          "livekit_outbound_trunk_not_allowlisted",
+        );
+        throw new Error(
+          `LiveKit SIP trunk '${tenant.livekitSipTrunkId}' is not on the platform allowlist. ` +
+          "Add it to LIVEKIT_SIP_TRUNK_ALLOWLIST or clear the tenant's livekit_sip_trunk_id.",
+        );
+      }
     }
 
     const roomName = `lead-${leadId}-${randomUUID().slice(0, 8)}`;

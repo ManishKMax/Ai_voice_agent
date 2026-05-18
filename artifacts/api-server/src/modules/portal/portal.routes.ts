@@ -247,11 +247,31 @@ router.patch("/credentials", requireClerkAuth, async (req: any, res, next): Prom
       telephonyProvider?: "twilio" | "exotel" | "livekit";
       twilio?: { accountSid?: string; authToken?: string; phoneNumber?: string };
       exotel?: { accountSid?: string; apiKey?: string; apiToken?: string; phoneNumber?: string };
-      livekit?: { sipTrunkId?: string; outboundNumber?: string };
+      // NOTE: `livekit.sipTrunkId` is intentionally NOT accepted on this
+      // self-service endpoint. Telephony resources are billable cross-tenant
+      // assets — a tenant must not be able to point their dispatch at a trunk
+      // belonging to another customer or a privileged platform trunk. Trunk
+      // assignment is admin-only (see admin.routes.ts → setTenantLivekitTrunk)
+      // and validated against the platform allowlist in calls.service at
+      // dispatch time. We DO allow tenants to choose their displayed "from"
+      // number for vanity, since LiveKit will reject it if the trunk doesn't
+      // own that DID.
+      livekit?: { outboundNumber?: string };
     };
 
     if (body.telephonyProvider && !["twilio", "exotel", "livekit"].includes(body.telephonyProvider)) {
       res.status(400).json({ error: "telephonyProvider must be 'twilio', 'exotel', or 'livekit'" });
+      return;
+    }
+
+    // Defensive: even though typed out of the surface, refuse any client
+    // attempt to PATCH the trunk field directly. Returns 403 with a hint at
+    // the admin endpoint so support flows are obvious.
+    if ((req.body as Record<string, unknown>)?.["livekit"] &&
+        typeof ((req.body as { livekit?: Record<string, unknown> }).livekit?.["sipTrunkId"]) !== "undefined") {
+      res.status(403).json({
+        error: "LiveKit SIP trunk assignment is admin-only. Contact your account manager.",
+      });
       return;
     }
 
@@ -264,7 +284,7 @@ router.patch("/credentials", requireClerkAuth, async (req: any, res, next): Prom
       exotelApiKey: body.exotel?.apiKey,
       exotelApiToken: body.exotel?.apiToken,
       exotelPhoneNumber: body.exotel?.phoneNumber,
-      livekitSipTrunkId: body.livekit?.sipTrunkId,
+      // trunk ID deliberately omitted — see comment above.
       livekitSipOutboundNumber: body.livekit?.outboundNumber,
     });
 

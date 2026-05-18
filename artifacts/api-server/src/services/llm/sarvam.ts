@@ -90,7 +90,7 @@ export const sarvamLlmProvider: LlmProvider = {
         body: JSON.stringify({
           model: useModel,
           messages: [{ role: "user", content: "Reply with the single word: OK" }],
-          max_tokens: 20,
+          max_tokens: 1,
           temperature: 0,
         }),
         signal: AbortSignal.timeout(10000),

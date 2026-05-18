@@ -120,7 +120,7 @@ export const geminiLlmProvider: LlmProvider = {
         headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: "Reply with the single word: OK" }] }],
-          generationConfig: { temperature: 0, maxOutputTokens: 20 },
+          generationConfig: { temperature: 0, maxOutputTokens: 1 },
         }),
         signal: AbortSignal.timeout(10000),
       });

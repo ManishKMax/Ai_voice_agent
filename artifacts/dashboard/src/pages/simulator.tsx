@@ -41,28 +41,9 @@ const LLM_PROVIDERS = [
   { id: "gemini", label: "Gemini 2.0 Flash" },
 ] as const;
 
-// Common Sarvam Bulbul-v3 speakers (the full list lives in replit.md).
-// "default" means "no per-call override — use platform setting".
-const VOICE_OPTIONS = [
-  { id: "default", label: "Use platform default" },
-  { id: "priya", label: "Priya (en-IN, female)" },
-  { id: "neha", label: "Neha (en-IN, female)" },
-  { id: "kavya", label: "Kavya (en-IN, female)" },
-  { id: "rohan", label: "Rohan (en-IN, male)" },
-  { id: "shubh", label: "Shubh (en-IN, male)" },
-  { id: "amit", label: "Amit (en-IN, male)" },
-] as const;
-
-const LANGUAGE_OPTIONS = [
-  { id: "default", label: "Use platform default" },
-  { id: "en-IN", label: "English (India)" },
-  { id: "hi-IN", label: "Hindi" },
-  { id: "te-IN", label: "Telugu" },
-  { id: "ta-IN", label: "Tamil" },
-  { id: "kn-IN", label: "Kannada" },
-  { id: "mr-IN", label: "Marathi" },
-  { id: "bn-IN", label: "Bengali" },
-] as const;
+// Voice + language are sourced from Settings → Agent on the server side
+// (agent_settings table). They are intentionally NOT overridable from the
+// simulator so test calls match what real leads will hear.
 
 // 13 metric fields, label + warn/error thresholds (ms). Thresholds match
 // the operator playbook in REPLIT.md ("acceptable: <800ms STT, <500ms LLM
@@ -156,8 +137,10 @@ export default function SimulatorPage() {
   // agent_settings.llmProviderId. Operator can opt into a specific provider
   // via the dropdown.
   const [llmProvider, setLlmProvider] = useState<string>("default");
-  const [voice, setVoice] = useState<string>("default");
-  const [language, setLanguage] = useState<string>("default");
+  // Voice + language are intentionally NOT overridable from the simulator.
+  // The agent uses whatever is configured in Settings → Agent so the test
+  // call matches what real leads will hear. (LLM provider stays overridable
+  // because Task #28's whole point is comparing providers side-by-side.)
 
   const [starting, setStarting] = useState(false);
   const [session, setSession] = useState<SessionInfo | null>(null);
@@ -255,7 +238,7 @@ export default function SimulatorPage() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [session]);
 
-  /** Mid-call switch helpers — changing LLM/voice/language while a call is
+  /** Mid-call switch helpers — changing LLM provider while a call is
    *  active requires tearing down and reconnecting (CallSession reads its
    *  overrides at constructor time, not per-turn). We prompt the operator,
    *  then pass the *new* values explicitly to handleStart so it doesn't
@@ -263,7 +246,7 @@ export default function SimulatorPage() {
   const switchAndRestart = async (
     label: string,
     apply: () => void,
-    overrides: { llmProvider?: string; voice?: string; language?: string },
+    overrides: { llmProvider?: string },
   ): Promise<void> => {
     if (!session) { apply(); return; }
     const ok = window.confirm(
@@ -277,19 +260,11 @@ export default function SimulatorPage() {
   const handleLlmChange = (next: string) => {
     void switchAndRestart("LLM provider", () => setLlmProvider(next), { llmProvider: next });
   };
-  const handleVoiceChange = (next: string) => {
-    void switchAndRestart("voice", () => setVoice(next), { voice: next });
-  };
-  const handleLanguageChange = (next: string) => {
-    void switchAndRestart("language", () => setLanguage(next), { language: next });
-  };
 
   const handleStart = async (
-    overrides?: { llmProvider?: string; voice?: string; language?: string },
+    overrides?: { llmProvider?: string },
   ) => {
     const effProvider = overrides?.llmProvider ?? llmProvider;
-    const effVoice = overrides?.voice ?? voice;
-    const effLanguage = overrides?.language ?? language;
     setError(null);
     setTranscript([]);
     setAllMetrics([]);
@@ -306,11 +281,9 @@ export default function SimulatorPage() {
           // dropdown on "Use global default" so server resolves from
           // agent_settings.llmProviderId.
           llmProviderOverride: effProvider === "default" ? undefined : effProvider,
-          // Only send overrides when the operator picked something other
-          // than "use platform default" — keeps the payload minimal and
-          // lets the server resolve from agent_settings as usual.
-          voice: effVoice === "default" ? undefined : effVoice,
-          language: effLanguage === "default" ? undefined : effLanguage,
+          // Voice + language are intentionally omitted — the server resolves
+          // both from agent_settings (Settings → Agent) so the simulator
+          // matches what real leads will hear.
         }),
       });
       if (!startRes?.success) {
@@ -505,28 +478,6 @@ export default function SimulatorPage() {
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {LLM_PROVIDERS.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1 md:col-span-2">
-              <Label>Voice</Label>
-              <Select value={voice} onValueChange={handleVoiceChange}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {VOICE_OPTIONS.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1 md:col-span-2">
-              <Label>Language</Label>
-              <Select value={language} onValueChange={handleLanguageChange}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {LANGUAGE_OPTIONS.map((p) => (
                     <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>
                   ))}
                 </SelectContent>
